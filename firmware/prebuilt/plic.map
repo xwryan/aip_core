@@ -1,0 +1,413 @@
+
+There are no discarded input sections
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+ROM              0x0000000080000000 0x0000000000008000
+RAM              0x0000000080008000 0x00000000000d8000
+*default*        0x0000000000000000 0xffffffffffffffff
+
+Linker script and memory map
+
+LOAD build/plic/main.o
+LOAD build/plic/user_cmds.o
+LOAD build/plic/aip_cmd.o
+LOAD build/plic/handlers.o
+LOAD build/plic/aip_cmd_c908.o
+LOAD build/plic/startup.o
+                0x0000000000000200                __min_heap_size = 0x200
+                [!provide]                        PROVIDE (__ram_end = 0x800dfff8)
+                [!provide]                        PROVIDE (__heap_end = __ram_end)
+
+.text           0x0000000080000000     0x1124
+                0x0000000080000000                . = ALIGN (0x4)
+                0x0000000080000000                __stext = .
+ *startup.o(*.text)
+ .text          0x0000000080000000       0xa8 build/plic/startup.o
+                0x0000000080000034                Reset_Handler
+ *startup.o(*.vectors)
+ *fill*         0x00000000800000a8       0x18 
+ .vectors       0x00000000800000c0       0x44 build/plic/startup.o
+                0x00000000800000c0                __Vectors
+ *vectors.o(*.text)
+ *(.text.entry)
+ *(.text)
+ .text          0x0000000080000104        0x0 build/plic/main.o
+ .text          0x0000000080000104       0x92 build/plic/user_cmds.o
+                0x0000000080000168                user_register
+ .text          0x0000000080000196      0xd6c build/plic/aip_cmd.o
+                0x000000008000059a                cmd_init
+                0x00000000800005ac                cmd_register
+                0x000000008000060a                cmd_get_int
+                0x000000008000062e                cmd_get_long
+                0x000000008000063a                cmd_get_str
+                0x00000000800006a4                cmd_return
+                0x0000000080000d7a                cmd_irq_handler
+                0x0000000080000d96                cmd_poll_once
+                0x0000000080000db6                cmd_loop
+                0x0000000080000e30                cmd_exit
+                0x0000000080000e46                cmd_register_builtins
+ .text          0x0000000080000f02       0x92 build/plic/handlers.o
+                0x0000000080000f02                Default_Handler
+                0x0000000080000f04                Stspend_Handler
+                0x0000000080000f06                Mtspend_Handler
+                0x0000000080000f08                Scoret_Handler
+                0x0000000080000f0a                Mcoret_Handler
+                0x0000000080000f0c                Sirq_Handler
+                0x0000000080000f10                ECC_L1_Handler
+                0x0000000080000f12                SystemInit
+                0x0000000080000f5c                pre_main
+ .text          0x0000000080000f94      0x154 build/plic/aip_cmd_c908.o
+                0x0000000080000f94                Mirq_Handler
+                0x000000008000109c                cmd_irq_init
+ *(.text*)
+ .text.startup  0x00000000800010e8       0x3a build/plic/main.o
+                0x00000000800010e8                main
+ *(.text.*)
+ *(.gnu.warning)
+ *(.stub)
+ *(.gnu.linkonce.t*)
+ *(.glue_7t)
+ *(.glue_7)
+ *(.jcr)
+ *(.init)
+ *(.fini)
+                0x0000000080001124                . = ALIGN (0x4)
+ *fill*         0x0000000080001122        0x2 
+                [!provide]                        PROVIDE (__ctbp = .)
+ *(.call_table_data)
+ *(.call_table_text)
+                0x0000000080001124                . = ALIGN (0x4)
+                0x0000000080001124                __etext = .
+
+.gcc_except_table
+ *(.gcc_except_table .gcc_except_table.*)
+
+.rodata         0x0000000080001128      0x224
+                0x0000000080001128                . = ALIGN (0x4)
+                0x0000000080001128                __srodata = .
+ *(.rdata)
+ *(.rdata*)
+ *(.rdata1)
+ *(.rdata.*)
+ *(.rodata)
+ .rodata        0x0000000080001128       0x11 build/plic/aip_cmd.o
+ *(.rodata1)
+ *(.rodata*)
+ *fill*         0x0000000080001139        0x7 
+ .rodata.str1.8
+                0x0000000080001140      0x20b build/plic/user_cmds.o
+                                         0x3f (size before relaxing)
+ .rodata.str1.8
+                0x000000008000134b      0x1cb build/plic/aip_cmd.o
+ *(.rodata.*)
+ *(.rodata.str1.4)
+ *(.srodata*)
+                0x0000000080001518                . = ALIGN (0x4)
+ *fill*         0x000000008000134b        0x1 
+                0x000000008000134c                __init_array_start = .
+                0x000000008000134c                __ctors_start__ = .
+ *(SORT_BY_NAME(.init_array.*))
+ *(.init_array)
+                0x000000008000134c                __init_array_end = .
+                0x000000008000134c                __ctors_end__ = .
+                0x000000008000134c                __fini_array_start = .
+                0x000000008000134c                __dtors_start__ = .
+ *(SORT_BY_NAME(.fini_array.*))
+ *(.fini_array)
+                0x000000008000134c                __fini_array_end = .
+                0x000000008000134c                __dtors_end__ = .
+                0x000000008000134c                __ctor_start__ = .
+ *(SORT_BY_NAME(.ctors.*))
+ *(.ctors)
+                0x000000008000134c                __ctor_end__ = .
+ *(SORT_BY_NAME(.dtors.*))
+ *(.dtors)
+                0x000000008000134c                __dtor_end__ = .
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                __fsymtab_start = .
+ *(FSymTab)
+                0x000000008000134c                __fsymtab_end = .
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                __vsymtab_start = .
+ *(VSymTab)
+                0x000000008000134c                __vsymtab_end = .
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                __rt_init_start = .
+ *(SORT_BY_NAME(.rti_fn*))
+                0x000000008000134c                __rt_init_end = .
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                __rt_utest_tc_tab_start = .
+ *(UtestTcTab)
+                0x000000008000134c                __rt_utest_tc_tab_end = .
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                __rtatcmdtab_start = .
+ *(RtAtCmdTab)
+                0x000000008000134c                __rtatcmdtab_end = .
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                __rtmsymtab_start = .
+ *(RTMSymTab)
+                0x000000008000134c                __rtmsymtab_end = .
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                __uRPCSvcTab_start = .
+ *(uRPCSvcTab)
+                0x000000008000134c                __uRPCSvcTab_end = .
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                __ve_table_start = .
+ *(SORT_BY_NAME(*.VarExpTab.*))
+                0x000000008000134c                __ve_table_end = .
+                0x000000008000134c                _cli_region_begin = .
+ *(CliRegion)
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                _cli_region_end = .
+                0x000000008000134c                __core_driver_start__ = .
+ *(.core_driver_entry)
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                __core_driver_end__ = .
+                0x000000008000134c                __bus_driver_start__ = .
+ *(*.bus_driver_entry)
+                0x000000008000134c                __bus_driver_end__ = .
+                0x000000008000134c                __early_driver_start__ = .
+ *(*.early_driver_entry)
+                0x000000008000134c                __early_driver_end__ = .
+                0x000000008000134c                __vfs_driver_start__ = .
+ *(*.vfs_driver_entry)
+                0x000000008000134c                __vfs_driver_end__ = .
+                0x000000008000134c                __level0_driver_start__ = .
+ *(*.level0_driver_entry)
+                0x000000008000134c                __level0_driver_end__ = .
+                0x000000008000134c                __level1_driver_start__ = .
+ *(*.level1_driver_entry)
+                0x000000008000134c                __level1_driver_end__ = .
+                0x000000008000134c                __level2_driver_start__ = .
+ *(*.level2_driver_entry)
+                0x000000008000134c                __level2_driver_end__ = .
+                0x000000008000134c                __level3_driver_start__ = .
+ *(*.level3_driver_entry)
+                0x000000008000134c                __level3_driver_end__ = .
+                0x000000008000134c                __post_driver_start__ = .
+ *(*.post_driver_entry)
+                0x000000008000134c                __post_driver_end__ = .
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                __erodata = .
+                0x000000008000134c                __rodata_end__ = .
+
+.rela.dyn       0x0000000080001350        0x0
+ .rela.text     0x0000000080001350        0x0 build/plic/main.o
+
+.data           0x000000008000134c        0x0
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                __sdata = .
+                0x000000008000134c                __data_start__ = .
+                0x000000008000134c                data_start = .
+ *(.got.plt)
+ *(.got)
+ *(.gnu.linkonce.r*)
+ *(.data)
+ .data          0x000000008000134c        0x0 build/plic/main.o
+ .data          0x000000008000134c        0x0 build/plic/user_cmds.o
+ .data          0x000000008000134c        0x0 build/plic/aip_cmd.o
+ .data          0x000000008000134c        0x0 build/plic/handlers.o
+ .data          0x000000008000134c        0x0 build/plic/aip_cmd_c908.o
+ .data          0x000000008000134c        0x0 build/plic/startup.o
+ *(.data*)
+ *(.data1)
+ *(.data.*)
+ *(.gnu.linkonce.d*)
+ *(.data1)
+ *(.gcc_except_table)
+ *(.gcc_except_table*)
+                0x000000008000134c                __start_init_call = .
+ *(.initcall.init)
+                0x000000008000134c                __stop_init_call = .
+                0x000000008000134c                __start_cmd = .
+ *(.bootloaddata.cmd)
+                0x000000008000134c                . = ALIGN (0x4)
+                0x000000008000134c                __stop_cmd = .
+                0x000000008000134c                __global_pointer$ = .
+ *(.sdata)
+ *(.sdata.*)
+ *(.sdata2.*)
+ *(.gnu.linkonce.s.*)
+ *(__libc_atexit)
+ *(__libc_subinit)
+ *(__libc_subfreeres)
+ *(.note.ABI-tag)
+                0x000000008000134c                __edata = .
+                0x000000008000134c                __data_end__ = .
+                0x000000008000134c                . = ALIGN (0x4)
+
+.gcc_except_table
+ *(.gcc_except_table .gcc_except_table.*)
+                0x000000008000134c                __edata = .
+                0x000000008000134c                __data_end__ = .
+
+.bss            0x0000000080008000     0x1028
+                0x0000000080008000                . = ALIGN (0x4)
+                0x0000000080008000                __sbss = ALIGN (0x4)
+                0x0000000080008000                __bss_start__ = .
+ *(.dynsbss)
+ *(.sbss)
+ .sbss          0x0000000080008000       0x10 build/plic/aip_cmd.o
+ *(.sbss.*)
+ *(.scommon)
+ *(.dynbss)
+ *(.bss)
+ .bss           0x0000000080008010        0x0 build/plic/main.o
+ .bss           0x0000000080008010        0x0 build/plic/user_cmds.o
+ .bss           0x0000000080008010     0x1018 build/plic/aip_cmd.o
+ .bss           0x0000000080009028        0x0 build/plic/handlers.o
+ .bss           0x0000000080009028        0x0 build/plic/aip_cmd_c908.o
+ .bss           0x0000000080009028        0x0 build/plic/startup.o
+ *(.bss.*)
+ *(COMMON)
+                0x0000000080009028                . = ALIGN (0x4)
+                0x0000000080009028                __ebss = .
+                0x0000000080009028                __bss_end__ = .
+                0x0000000080009028                __end = .
+                0x0000000080009028                end = .
+
+._user_heap     0x0000000080009030     0x3200
+                0x0000000080009030                . = ALIGN (0x4)
+ *(.stack*)
+ .stack         0x0000000080009030     0x3000 build/plic/startup.o
+                0x0000000080009030                g_base_irqstack
+                0x000000008000a030                g_base_mainstack
+                0x000000008000a030                g_top_irqstack
+                0x000000008000c030                g_top_mainstack
+                0x000000008000c030                . = ALIGN (0x4)
+                0x000000008000c030                __heap_start = .
+                0x000000008000c230                . = (. + __min_heap_size)
+ *fill*         0x000000008000c030      0x200 
+                0x000000008000c230                . = ALIGN (0x4)
+OUTPUT(build/plic.elf elf64-littleriscv)
+
+.debug_info     0x0000000000000000     0x20c2
+ .debug_info    0x0000000000000000       0xf2 build/plic/main.o
+ .debug_info    0x00000000000000f2      0x25b build/plic/user_cmds.o
+ .debug_info    0x000000000000034d     0x1906 build/plic/aip_cmd.o
+ .debug_info    0x0000000000001c53      0x19b build/plic/handlers.o
+ .debug_info    0x0000000000001dee      0x29a build/plic/aip_cmd_c908.o
+ .debug_info    0x0000000000002088       0x3a build/plic/startup.o
+
+.debug_abbrev   0x0000000000000000      0x898
+ .debug_abbrev  0x0000000000000000       0xa1 build/plic/main.o
+ .debug_abbrev  0x00000000000000a1      0x11d build/plic/user_cmds.o
+ .debug_abbrev  0x00000000000001be      0x469 build/plic/aip_cmd.o
+ .debug_abbrev  0x0000000000000627       0xf0 build/plic/handlers.o
+ .debug_abbrev  0x0000000000000717      0x159 build/plic/aip_cmd_c908.o
+ .debug_abbrev  0x0000000000000870       0x28 build/plic/startup.o
+
+.debug_aranges  0x0000000000000000      0x120
+ .debug_aranges
+                0x0000000000000000       0x30 build/plic/main.o
+ .debug_aranges
+                0x0000000000000030       0x30 build/plic/user_cmds.o
+ .debug_aranges
+                0x0000000000000060       0x30 build/plic/aip_cmd.o
+ .debug_aranges
+                0x0000000000000090       0x30 build/plic/handlers.o
+ .debug_aranges
+                0x00000000000000c0       0x30 build/plic/aip_cmd_c908.o
+ .debug_aranges
+                0x00000000000000f0       0x30 build/plic/startup.o
+
+.debug_rnglists
+                0x0000000000000000      0x2f9
+ .debug_rnglists
+                0x0000000000000000       0x17 build/plic/main.o
+ .debug_rnglists
+                0x0000000000000017      0x271 build/plic/aip_cmd.o
+ .debug_rnglists
+                0x0000000000000288       0x71 build/plic/aip_cmd_c908.o
+
+.debug_line     0x0000000000000000     0x2aff
+ .debug_line    0x0000000000000000       0xc1 build/plic/main.o
+ .debug_line    0x00000000000000c1      0x190 build/plic/user_cmds.o
+ .debug_line    0x0000000000000251     0x23a6 build/plic/aip_cmd.o
+ .debug_line    0x00000000000025f7      0x1d8 build/plic/handlers.o
+ .debug_line    0x00000000000027cf      0x204 build/plic/aip_cmd_c908.o
+ .debug_line    0x00000000000029d3      0x12c build/plic/startup.o
+
+.debug_str      0x0000000000000000      0x53e
+ .debug_str     0x0000000000000000      0x53e build/plic/main.o
+                                        0x117 (size before relaxing)
+ .debug_str     0x000000000000053e      0x12b build/plic/user_cmds.o
+ .debug_str     0x000000000000053e      0x400 build/plic/aip_cmd.o
+ .debug_str     0x000000000000053e      0x162 build/plic/handlers.o
+ .debug_str     0x000000000000053e      0x15a build/plic/aip_cmd_c908.o
+ .debug_str     0x000000000000053e       0x50 build/plic/startup.o
+
+.debug_line_str
+                0x0000000000000000      0x119
+ .debug_line_str
+                0x0000000000000000      0x119 build/plic/main.o
+                                         0x83 (size before relaxing)
+ .debug_line_str
+                0x0000000000000119       0x83 build/plic/user_cmds.o
+ .debug_line_str
+                0x0000000000000119       0xf0 build/plic/aip_cmd.o
+ .debug_line_str
+                0x0000000000000119       0x73 build/plic/handlers.o
+ .debug_line_str
+                0x0000000000000119       0x89 build/plic/aip_cmd_c908.o
+ .debug_line_str
+                0x0000000000000119       0x33 build/plic/startup.o
+
+.comment        0x0000000000000000       0x45
+ .comment       0x0000000000000000       0x45 build/plic/main.o
+                                         0x46 (size before relaxing)
+ .comment       0x0000000000000045       0x46 build/plic/user_cmds.o
+ .comment       0x0000000000000045       0x46 build/plic/aip_cmd.o
+ .comment       0x0000000000000045       0x46 build/plic/handlers.o
+ .comment       0x0000000000000045       0x46 build/plic/aip_cmd_c908.o
+
+.note.GNU-stack
+                0x0000000000000000        0x0
+ .note.GNU-stack
+                0x0000000000000000        0x0 build/plic/main.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 build/plic/user_cmds.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 build/plic/aip_cmd.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 build/plic/handlers.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 build/plic/aip_cmd_c908.o
+
+.riscv.attributes
+                0x0000000000000000       0x78
+ .riscv.attributes
+                0x0000000000000000       0x74 build/plic/main.o
+ .riscv.attributes
+                0x0000000000000074       0x74 build/plic/user_cmds.o
+ .riscv.attributes
+                0x00000000000000e8       0x78 build/plic/aip_cmd.o
+ .riscv.attributes
+                0x0000000000000160       0x78 build/plic/handlers.o
+ .riscv.attributes
+                0x00000000000001d8       0x78 build/plic/aip_cmd_c908.o
+ .riscv.attributes
+                0x0000000000000250       0x76 build/plic/startup.o
+
+.debug_frame    0x0000000000000000      0x740
+ .debug_frame   0x0000000000000000       0x38 build/plic/main.o
+ .debug_frame   0x0000000000000038       0x90 build/plic/user_cmds.o
+ .debug_frame   0x00000000000000c8      0x450 build/plic/aip_cmd.o
+ .debug_frame   0x0000000000000518      0x108 build/plic/handlers.o
+ .debug_frame   0x0000000000000620      0x120 build/plic/aip_cmd_c908.o
+
+.debug_loclists
+                0x0000000000000000     0x10b8
+ .debug_loclists
+                0x0000000000000000       0x3f build/plic/user_cmds.o
+ .debug_loclists
+                0x000000000000003f      0xfd3 build/plic/aip_cmd.o
+ .debug_loclists
+                0x0000000000001012       0x3f build/plic/handlers.o
+ .debug_loclists
+                0x0000000000001051       0x67 build/plic/aip_cmd_c908.o

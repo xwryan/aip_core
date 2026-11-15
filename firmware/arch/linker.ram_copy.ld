@@ -1,0 +1,272 @@
+/*
+ * Copyright (C) 2017-2024 Alibaba Group Holding Limited
+ */
+
+MEMORY
+{
+	ROM    : ORIGIN = 0x80000000, LENGTH = 0x8000    /* on-chip ROM 0x8000 */
+	RAM    : ORIGIN = 0x80008000, LENGTH = 0xD8000    /* on-chip RAM 0x8000 */
+}
+
+__min_heap_size = 0x200;
+
+/*reserve 8 bytes for align*/
+PROVIDE (__ram_end  = 0x80008000 + 0xD8000 - 0x8);
+PROVIDE (__heap_end = __ram_end);
+
+REGION_ALIAS("REGION_TEXT",    RAM);
+REGION_ALIAS("REGION_RODATA",  RAM);
+REGION_ALIAS("REGION_DATA",    RAM);
+REGION_ALIAS("REGION_BSS",     RAM);
+
+ENTRY(Reset_Handler)
+SECTIONS
+{
+ .boot : {
+  . = ALIGN(0x4) ;
+  KEEP(*startup.o(*.vectors))
+  KEEP(*startup.o(*.text))
+  /* Align .boot end to 16 so the RAM image LMA base shares the VMA base's
+     alignment (0x80008000). Keeps VMA-LMA offset a multiple of 16, so every
+     internal section (max align 8) stays in lockstep for the linear copy. */
+  . = ALIGN(16) ;
+ } > ROM
+ .text : {
+  . = ALIGN(0x4) ;
+  __stext = . ;
+  __ram_image_vma_start = . ;
+  KEEP(*vectors.o(*.text))
+  KEEP(*(.text.entry))
+  *(.text)
+  *(.text*)
+  *(.text.*)
+  *(.gnu.warning)
+  *(.stub)
+  *(.gnu.linkonce.t*)
+  *(.glue_7t)
+  *(.glue_7)
+  *(.jcr)
+  KEEP (*(.init))
+  KEEP (*(.fini))
+  . = ALIGN(0x4) ;
+  PROVIDE(__ctbp = .);
+  *(.call_table_data)
+  *(.call_table_text)
+  /* Pad .text to 8 inside the section: .rodata is 8-aligned and AT>ROM will
+     not mirror boundary padding onto the LMA. Ending .text on an 8-multiple
+     means .rodata needs no boundary pad, so VMA and LMA stay in lockstep. */
+  . = ALIGN(8) ;
+  __etext = . ;
+ } > REGION_TEXT AT > ROM
+ .gcc_except_table : ONLY_IF_RO {
+  *(.gcc_except_table .gcc_except_table.*)
+ } > REGION_TEXT AT > ROM
+ .rodata : {
+  . = ALIGN(0x4) ;
+  __srodata = .;
+  *(.rdata)
+  *(.rdata*)
+  *(.rdata1)
+  *(.rdata.*)
+  *(.rodata)
+  *(.rodata1)
+  *(.rodata*)
+  *(.rodata.*)
+  *(.rodata.str1.4)
+  *(.srodata*)
+  . = ALIGN(0x4) ;
+
+  __init_array_start = .;
+  __ctors_start__ = .;
+  KEEP (*(SORT(.init_array.*)))
+  KEEP (*(.init_array))
+  __init_array_end = .;
+  __ctors_end__ = .;
+
+  __fini_array_start = .;
+  __dtors_start__ = .;
+  KEEP (*(SORT(.fini_array.*)))
+  KEEP (*(.fini_array))
+  __fini_array_end = .;
+  __dtors_end__ = .;
+
+  __ctor_start__ = .;
+  KEEP (*(SORT(.ctors.*)))
+  KEEP (*(.ctors))
+  __ctor_end__ = .;
+  KEEP (*(SORT(.dtors.*)))
+  KEEP (*(.dtors))
+  __dtor_end__ = .;
+  . = ALIGN(0x4) ;
+/*****************************************/
+  /* section information for finsh shell */
+  . = ALIGN(0x4);
+  __fsymtab_start = .;
+  KEEP(*(FSymTab))
+  __fsymtab_end = .;
+  . = ALIGN(0x4);
+  __vsymtab_start = .;
+  KEEP(*(VSymTab))
+  __vsymtab_end = .;
+  . = ALIGN(0x4);
+
+  /* section information for initial. */
+  __rt_init_start = .;
+  KEEP(*(SORT(.rti_fn*)))
+  __rt_init_end = .;
+  . = ALIGN(0x4) ;
+
+  /* section information for at utest */
+  __rt_utest_tc_tab_start = .;
+  KEEP(*(UtestTcTab))
+  __rt_utest_tc_tab_end = .;
+  . = ALIGN(0x4);
+
+  /* section information for at server */
+  . = ALIGN(0x4);
+  __rtatcmdtab_start = .;
+  KEEP(*(RtAtCmdTab))
+  __rtatcmdtab_end = .;
+  . = ALIGN(0x4);
+
+  /* section information for modules */
+  . = ALIGN(0x4);
+  __rtmsymtab_start = .;
+  KEEP(*(RTMSymTab))
+  __rtmsymtab_end = .;
+
+  /* section information for uPRC */
+  . = ALIGN(0x4);
+  __uRPCSvcTab_start = .;
+  KEEP(*(uRPCSvcTab))
+  __uRPCSvcTab_end = .;
+
+  /* section information for var export */
+  . = ALIGN(0x4);
+  __ve_table_start = .;
+  KEEP(*(SORT(*.VarExpTab.*)))
+  __ve_table_end = .;
+/*****************************************/
+/************** added drivers **************/
+  _cli_region_begin = .;
+  KEEP(*(CliRegion))
+  . = ALIGN(0x4) ;
+  _cli_region_end = .;
+
+  __core_driver_start__ = .;
+  KEEP(*(.core_driver_entry))
+  . = ALIGN(0x4) ;
+  __core_driver_end__ = .;
+
+  __bus_driver_start__ = .;
+  KEEP(*(*.bus_driver_entry))
+  __bus_driver_end__ = .;
+
+  __early_driver_start__ = .;
+  KEEP(*(*.early_driver_entry))
+  __early_driver_end__ = .;
+
+  __vfs_driver_start__ = .;
+  KEEP(*(*.vfs_driver_entry))
+  __vfs_driver_end__ = .;
+
+  __level0_driver_start__ = .;
+  KEEP(*(*.level0_driver_entry))
+  __level0_driver_end__ = .;
+
+  __level1_driver_start__ = .;
+  KEEP(*(*.level1_driver_entry))
+  __level1_driver_end__ = .;
+
+  __level2_driver_start__ = .;
+  KEEP(*(*.level2_driver_entry))
+  __level2_driver_end__ = .;
+
+  __level3_driver_start__ = .;
+  KEEP(*(*.level3_driver_entry))
+  __level3_driver_end__ = .;
+
+  __post_driver_start__ = .;
+  KEEP(*(*.post_driver_entry))
+  __post_driver_end__ = .;
+/************** end of drivers *********/
+  /* Pad .rodata to 8 *inside* the section so the size lands on an 8-byte
+     multiple. AT>ROM packs LMA tightly and does NOT mirror inter-section
+     VMA alignment padding, so the following .data (8-aligned) would otherwise
+     diverge by 4 between VMA and LMA, breaking the linear ROM→RAM copy. */
+  . = ALIGN(8) ;
+  __erodata = .;
+  __rodata_end__ = .;
+ } > REGION_RODATA AT > ROM
+ .data : {
+  . = ALIGN(0x4) ;
+  __sdata = . ;
+  __data_start__ = . ;
+  data_start = . ;
+  *(.got.plt)
+  *(.got)
+  *(.gnu.linkonce.r*)
+  *(.data)
+  *(.data*)
+  *(.data1)
+  *(.data.*)
+  *(.gnu.linkonce.d*)
+  *(.data1)
+  *(.gcc_except_table)
+  *(.gcc_except_table*)
+  __start_init_call = .;
+  *(.initcall.init)
+  __stop_init_call = .;
+  __start_cmd = .;
+  *(.bootloaddata.cmd)
+  . = ALIGN(4) ;
+  __stop_cmd = .;
+  __global_pointer$ = .;
+  *(.sdata)
+  *(.sdata.*)
+  *(.sdata2.*)
+  *(.gnu.linkonce.s.*)
+  *(__libc_atexit)
+  *(__libc_subinit)
+  *(__libc_subfreeres)
+  *(.note.ABI-tag)
+  __edata = .;
+  __data_end__ = .;
+  . = ALIGN(0x4) ;
+ } > REGION_DATA AT > ROM
+ .gcc_except_table : ONLY_IF_RW {
+  *(.gcc_except_table .gcc_except_table.*)
+  __edata = .;
+  __data_end__ = .;
+ } > REGION_DATA AT > ROM
+ /* End marker AFTER the RW except-table block so any (C++) RW exception data
+    is included in the ROM→RAM copy. Empty for pure-C firmware. */
+ __ram_image_vma_end = . ;
+ __ram_image_lma     = LOADADDR(.text) ;
+ .bss : {
+  . = ALIGN(0x4) ;
+  __sbss = ALIGN(0x4) ;
+  __bss_start__ = . ;
+  *(.dynsbss)
+  *(.sbss)
+  *(.sbss.*)
+  *(.scommon)
+  *(.dynbss)
+  *(.bss)
+  *(.bss.*)
+  *(COMMON)
+  . = ALIGN(0x4) ;
+  __ebss = . ;
+  __bss_end__ = .;
+  __end = . ;
+  end = . ;
+ } > REGION_BSS 
+ ._user_heap (NOLOAD): {
+  . = ALIGN(0x4) ;
+  *(.stack*)
+  . = ALIGN(0x4) ;
+  __heap_start = .;
+  . += __min_heap_size;
+  . = ALIGN(0x4) ;
+ } > REGION_BSS
+}
