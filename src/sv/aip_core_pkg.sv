@@ -75,6 +75,9 @@ import uvm_pkg::*;
 // 命令行参数解析（依赖 aip_str, uvm_pkg）
 `include "core/aip_cmdline.sv"
 
+// 通用等待/超时策略（依赖 aip_cmdline 的 aip_int；各项目统一复用，子类加场景超时）
+`include "util/aip_wait_policy.sv"
+
 // CPU 桥接（必须在 aip_cmd 之前: aip_cmd::exec 引用 aip_cpu_bridge::send_cmd）
 `include "bridge/aip_cpu_bridge.sv"
 

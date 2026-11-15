@@ -1220,6 +1220,26 @@ longint unsigned v = aip_str::str_to_num("0xFF", width);     // 255，支持 0x/
 string ns = aip_str::remove_all_spaces("a b c");             // "abc"
 ```
 
+### 6.5 等待/超时策略（aip_wait_policy）
+
+各项目共用的等待对象（`src/sv/util/aip_wait_policy.sv`，由 `aip_core_pkg` 提供），任何等待都应经它而不是裸 `#delay`。
+实际超时 = 基准值 × `timeout_multiplier`（饱和乘法），`max_poll_attempts` 是仿真时间不推进时的第二道防挂死保护；
+超时统一报 `uvm_error("WAIT_POLICY")`。`load_params(path)` 用 `aip_int` 读取 `<path>.poll_ns/timeout_ns/multiplier/max_polls`。
+项目专用的场景超时由子类增加字段（例如 virtio 的 `virtio_wait_policy`，参数 `vio.wait.*`）。
+
+```systemverilog
+aip_wait_policy pol = aip_wait_policy::type_id::create("pol");
+pol.load_params("rdma.wait");                      // +rdma.wait.timeout_ns=200000 +rdma.wait.multiplier=10
+pol.poll_until_flag("link up", 5000, 10, up, timed_out);   // ref 标志由其他线程置位
+// 自行轮询（读寄存器/内存）：起点必须用 wait_start()，与调用方 timeunit 无关
+realtime start = pol.wait_start(); int unsigned n = 0;
+while (!done() && !pol.deadline_reached(start, pol.default_timeout_ns, n)) begin
+  pol.wait_poll_interval(pol.time_left_ns(start, pol.default_timeout_ns)); n++;
+end
+```
+
+回归：`make test_wait_policy`。
+
 ---
 
 ## 7. UCLI 后门工具（fv / gv / mem ECC）

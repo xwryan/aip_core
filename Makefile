@@ -24,7 +24,7 @@ AIP_TEST_INCDIRS := +incdir+../.. +incdir+../../src/sv +incdir+../../src/sv/core
 
 .PHONY: all help test_reg_seq test_user_seq test_soload test_tcl_watchdog test_checkpoint_wait_tcl test_checkpoint_wait_vcs test_checkpoint_restore test_end_checker_registry test_cmdline_negative test_cmdline_container_syntax test_cmdline_print_control test_cmdline_wide test_cmdline_array_random test_cmdline_struct_schema_scalar test_cmdline_struct_schema_containers test_cmdline_struct_schema_typed_postprocess test_cmdline_struct_schema_nested test_cmdline_struct_schema_nested_canonical test_cmdline_struct_schema_final_review test_cmdline_struct_schema_queue test_cmdline_struct_schema_integration test_cmdline_struct_schema_negative test_cmdline_strict_queue test_cmdline_struct_schema_lifecycle test_cmdline_struct_schema_width_fail test_cmdline_struct_schema_primitive_arrays test_cmdline_struct_schema_size_budget test_cmdline_struct_schema test_core_package test_core_package_preinclude test_cpu_bridge test_cseq_arbitration test_c_bridge_socket test_dut_control test_str_delim test_cmd_str_result test_x_watch_vcs clean
 .PHONY: test_cmdline_zero_weight test_cmdline_diagnostics
-.PHONY: test_cmd_wait
+.PHONY: test_cmd_wait test_wait_policy
 .PHONY: test_reg_wide
 .PHONY: test_cmd_result_context
 .PHONY: test_cmd_compat test_checkpoint_background test_checkpoint_cmdline test_cmdline_restore_loader_tcl ci-cmd
@@ -86,6 +86,7 @@ help:
 	@echo "RAL aggregate: test_ral test_ral_128 (VCS host only)"
 	@echo "SV regression targets (VCS on PATH): test_core_package test_core_package_preinclude"
 	@echo "  test_cpu_bridge test_reg_seq test_reg_wide test_user_seq test_soload test_tcl_watchdog test_checkpoint_wait_vcs"
+	@echo "  test_wait_policy (shared wait/timeout policy: multiplier, timeouts, attempt cap, load_params)"
 	@echo "  test_cmd_wait (per-command async wait=0 and synchronous default)"
 	@echo "  test_cmd_result_context (isolated results, legacy compatibility, expired-context rejection)"
 	@echo "  test_cmd_compat (direct SV calls, nested legacy results, raw argument preservation)"
@@ -328,6 +329,12 @@ test_cmd_wait:
 	    && ! grep -Eq '^CMD_WAIT_FAIL|^Error-|no ack after' cmd_wait.log
 
 # Signed integer command-line parsing regression — requires VCS on PATH
+# 通用等待策略：倍率/饱和、poll/事件超时、次数上限、自行轮询与 load_params；纯 SV，无需 DPI 库。
+test_wait_policy:
+	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_wait_policy -o simv_wait_policy -Mdir=csrc_wait_policy test_wait_policy.sv
+	cd $(TEST_SV_DIR) && ./simv_wait_policy +twp.wait.poll_ns=7 +twp.wait.timeout_ns=500 +twp.wait.multiplier=4 +twp.wait.max_polls=99 > wait_policy.log 2>&1 || { cat wait_policy.log; exit 1; }
+	cd $(TEST_SV_DIR) && grep -E '^TWP_|TEST_WAIT_POLICY|^UVM_(ERROR|FATAL) *:' wait_policy.log && grep -q TEST_WAIT_POLICY_PASS wait_policy.log
+
 test_cmdline_negative:
 	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -o simv_cmdline_negative -Mdir=csrc_cmdline_negative test_cmdline_negative.sv
 	cd $(TEST_SV_DIR) && ./simv_cmdline_negative "+neg_dec=-10" "+neg_hex=-0x10" "+neg_sv=-8'd10" "+plus_dec=+10" "+neg_range=[-10:-1]" "+cross_range=[-2:2]" "+neg_list=-3,-2,-1" "+neg_inc=inc:-10:10:2" "+neg_dec_seq=dec:10:-10:2" "+neg_weight={-3:=10,[-2:-1]:=20}" "+neg_bits=-1" "+positive=0x2a" > cmdline_negative.log 2>&1 || { cat cmdline_negative.log; exit 1; }
