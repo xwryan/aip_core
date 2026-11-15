@@ -1,5 +1,4 @@
-# The Makefile launches simv from tests/sv/, so the repository root is two
-# levels above the current working directory (tests/sv -> tests -> repo).
+# Launched from tests/sv/, so the repository root is two levels up.
 set ::env(AIP_CORE) [file normalize ../..]
 source [file join $::env(AIP_CORE) src tcl aip_cmd.tcl]
 set ::aip_ckpt_dir ./checkpoint_wait_artifacts

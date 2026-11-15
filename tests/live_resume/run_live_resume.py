@@ -108,8 +108,7 @@ def check_pause(child: pexpect.spawn, hit: int, *, pending: bool = False,
     expect(child, r"(?:^|\r?\n)[ \t]*(?:pause%[ \t]*)?AIP_LIVE_DEBUG_INTENTIONAL\r?\n")
     expect(child, r"pause%")
 
-    # 普通命令与有界推进已由独立暂停注入门禁验证；这里只检查仍然不允许
-    # 的全局生命周期操作，保持旧用例的精确时间和单次driver计数不变。
+    # 只检查仍不允许的全局生命周期操作（普通命令/有界推进由暂停注入门禁覆盖）。
     guards = {
         "checkpoint": "aip_checkpoint forbidden_pause",
         "restore": "aip_restore forbidden_pause",

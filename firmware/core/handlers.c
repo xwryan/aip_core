@@ -1,10 +1,5 @@
-/* Minimal CSI runtime + interrupt handler stubs for aip_core firmware on C907/C908.
- * Replaces full XuanTie components/chip_riscv_dummy with bare minimum.
- *
- * SystemInit derives from XuanTie SDK components/chip_riscv_dummy/src/arch/c908/system.c
- * — strip out anything aip_cmd doesn't need (cache/PLIC/MMU/PMP optional), keep
- * the CSR settings required to avoid trap on rv64gc FP instructions.
- */
+/* Minimal CSI runtime + interrupt stubs for aip_core firmware on C907/C908 (replaces XuanTie chip_riscv_dummy).
+ * SystemInit derives from the XuanTie SDK c908/system.c, keeping only the CSR setup needed to avoid traps. */
 
 extern int main(void);
 
@@ -17,14 +12,9 @@ __attribute__((weak)) void Sirq_Handler(void)    { Default_Handler(); }
 __attribute__((weak)) void Mirq_Handler(void)    { Default_Handler(); }
 __attribute__((weak)) void ECC_L1_Handler(void)  { Default_Handler(); }
 
-/* SystemInit: 必做 CSR 配置 (跟 XuanTie SDK / gdbinit 完整序列对齐).
- * 否则:
- *   - mstatus.FS=0 → rv64gc 内 FP 指令 trap → mtvec → 跳 0
- *   - mxstatus theadisaee=0 → XuanTie 扩展指令 trap
- *   - mhcr cache=0 → 若 chip PMA 强制 cacheable region, 访问行为未定义
- *   - mcor 不 invalidate cache → 复位时 cache 状态可能未定义, fetch 拿垃圾
- *
- * CSR 值参考 XuanTie 玄铁手册 p19 gdbinit + system.c::SystemInit. */
+/* 必做 CSR 配置（与 XuanTie SDK / gdbinit 序列对齐，参考玄铁手册 p19 与 system.c::SystemInit），否则：
+ * mstatus.FS=0 时 FP 指令 trap；theadisaee=0 时 XuanTie 扩展指令 trap；
+ * mhcr cache=0 且 PMA 强制 cacheable 时访问未定义；复位后不 invalidate cache 可能取到垃圾。 */
 __attribute__((weak)) void SystemInit(void) {
     unsigned long status;
 

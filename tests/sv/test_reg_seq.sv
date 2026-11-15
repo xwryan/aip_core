@@ -1,11 +1,7 @@
 `include "aip_core_pkg.sv"
 
-// ============================================================
-// test_reg_seq — aip_cmd_reg 宏端到端测试
-// fake 寄存器堆 (assoc array) + reg_item/driver/seq/vsqr
-// ============================================================
+// aip_cmd_reg 宏端到端测试：fake 寄存器堆（assoc array）+ reg_item/driver/seq/vsqr。
 
-// ---- Register transaction ----
 class reg_item extends uvm_sequence_item;
     `uvm_object_utils(reg_item)
     bit              is_write;
@@ -21,7 +17,7 @@ class reg_item extends uvm_sequence_item;
     endfunction
 endclass
 
-// ---- Register sequence (契约: 固定命名字段) ----
+// aip_cmd_reg 契约：sequence 使用固定命名字段。
 class reg_seq extends uvm_sequence #(reg_item);
     `uvm_object_utils(reg_seq)
     bit              is_write;
@@ -40,11 +36,10 @@ class reg_seq extends uvm_sequence #(reg_item);
         tr.len = len;
         tr.mask = mask;
         finish_item(tr);
-        if (!is_write) rdata = tr.rdata;   // 回读
+        if (!is_write) rdata = tr.rdata;
     endtask
 endclass
 
-// ---- Driver: fake register file ----
 class reg_driver extends uvm_driver #(reg_item);
     `uvm_component_utils(reg_driver)
     longint unsigned regfile[longint unsigned];
@@ -66,7 +61,6 @@ class reg_driver extends uvm_driver #(reg_item);
     endtask
 endclass
 
-// ---- Agent ----
 class reg_agent extends uvm_agent;
     `uvm_component_utils(reg_agent)
     reg_driver drv;
@@ -82,14 +76,12 @@ class reg_agent extends uvm_agent;
     endfunction
 endclass
 
-// ---- Virtual sequencer ----
 class virtual_sqr extends uvm_sequencer;
     `uvm_component_utils(virtual_sqr)
     static uvm_sequencer #(reg_item) reg_sqr;
     function new(string name, uvm_component parent); super.new(name, parent); endfunction
 endclass
 
-// ---- Env ----
 class my_env extends uvm_env;
     `uvm_component_utils(my_env)
     reg_agent   agt;
@@ -107,14 +99,12 @@ class my_env extends uvm_env;
     endfunction
 endclass
 
-// ---- 注册 reg 命令 ----
 `aip_cmd_reg(reg_acc, reg_seq, virtual_sqr::reg_sqr)
 // 非法字符命令名（含 '.'）— 靠转义 class 标识符支持
 `aip_cmd_reg(reg.rw, reg_seq, virtual_sqr::reg_sqr)
 // 含 '::' 的命令名 — 回归转义 class 标识符 + TCL 派发
 `aip_cmd_reg(xxx::reg_write, reg_seq, virtual_sqr::reg_sqr)
 
-// ---- Test ----
 class my_test extends uvm_test;
     `uvm_component_utils(my_test)
     my_env env;
@@ -131,7 +121,6 @@ class my_test extends uvm_test;
     endtask
 endclass
 
-// ---- Top ----
 module test_reg_seq;
     aip_clk_if clk0_if();
     aip_clk clk0;

@@ -1,6 +1,5 @@
-// tests/ral：Task1独立物理总线夹具，依赖UVM和本次ralgen生成的模型。
-// env拥有model/adapter/driver/sequencer，UVM负责组件生命周期；driver拥有四态
-// word存储与观测trace，绝不以RAL mirror或产品policy转换函数充当硬件oracle。
+// RAL 独立物理总线夹具（基于本次 ralgen 生成的模型）：driver 持有四态 word 存储与观测 trace，
+// 绝不以 RAL mirror 或产品 policy 转换函数充当硬件 oracle。
 `ifndef AIP_RAL_FIXTURE_SV
 `define AIP_RAL_FIXTURE_SV
 `include "uvm_macros.svh"
@@ -15,17 +14,15 @@ package aip_ral_fixture_pkg;
         bit completed;
         `uvm_object_utils(aip_ral_fixture_item)
 
-        // 构造单拍事务；默认未完成，driver显式提交完成标记。
         function new(string name = "aip_ral_fixture_item");
             super.new(name);
         endfunction
     endclass
 
-    // adapter只属测试夹具，公开计数用于断言数据在二态化之前已检查。
+    // 测试专用 adapter（不继承产品 adapter 基类）；公开计数用于断言数据在二态化之前已检查。
     class aip_ral_fixture_adapter extends uvm_reg_adapter;
         int unsigned unknown_count;
         `uvm_object_utils(aip_ral_fixture_adapter)
-
         // 使用标准原位响应并保留有效byte lane；不引入产品adapter基类。
         function new(string name = "aip_ral_fixture_adapter");
             super.new(name);
@@ -33,7 +30,6 @@ package aip_ral_fixture_pkg;
             provides_responses = 0;
         endfunction
 
-        // 独立创建请求，复制标准bus op；请求归当前UVM访问所有。
         virtual function uvm_sequence_item reg2bus(const ref uvm_reg_bus_op rw);
             aip_ral_fixture_item item = new();
             item.op = rw;
@@ -80,12 +76,11 @@ package aip_ral_fixture_pkg;
         bit read_corrupt;
         `uvm_component_utils(aip_ral_fixture_driver)
 
-        // driver归env所有；存储默认按首次访问显式初始化为0。
         function new(string name, uvm_component parent);
             super.new(name, parent);
         endfunction
 
-        // 清空一次操作的trace，保留物理存储和故障开关供跨操作断言。
+        // 只清 trace，物理存储与故障开关跨操作保留。
         function void clear_trace();
             addresses.delete();
             data_trace.delete();
@@ -94,7 +89,7 @@ package aip_ral_fixture_pkg;
             kinds.delete();
         endfunction
 
-        // 按byte enable修改独立存储，完成后原位回复；无重试/预测/自动恢复。
+        // 按 byte enable 修改存储后原位回复；无重试/预测/自动恢复。
         virtual task run_phase(uvm_phase phase);
             forever begin
                 seq_item_port.get_next_item(req);
@@ -130,12 +125,11 @@ package aip_ral_fixture_pkg;
         aip_ral_fixture_adapter adapter;
         `uvm_component_utils(aip_ral_fixture_env)
 
-        // 构造环境；所有模型handle仅在本次仿真生命周期有效。
         function new(string name, uvm_component parent);
             super.new(name, parent);
         endfunction
 
-        // build/lock真实生成模型，保存明确成员；默认map保持标准UVM拍序。
+        // 默认 map 保持标准 UVM 拍序。
         virtual function void build_phase(uvm_phase phase);
             super.build_phase(phase);
             model = new("model");
@@ -149,7 +143,6 @@ package aip_ral_fixture_pkg;
             model.default_map.set_sequencer(sqr, adapter);
         endfunction
 
-        // 连接driver与sequencer，访问仲裁和请求生命周期由标准UVM管理。
         virtual function void connect_phase(uvm_phase phase);
             super.connect_phase(phase);
             driver.seq_item_port.connect(sqr.seq_item_export);

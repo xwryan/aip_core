@@ -1,7 +1,4 @@
-//===========================================================
-// fake_mem.sv — synthetic memory modules for aip_cpu_mem tests
-// Shared between test_cpu_mem.sv and test_cpu_mem72.sv
-//===========================================================
+// Synthetic memory modules shared by test_cpu_mem.sv and test_cpu_mem72.sv.
 `ifndef FAKE_MEM_SV
 `define FAKE_MEM_SV
 

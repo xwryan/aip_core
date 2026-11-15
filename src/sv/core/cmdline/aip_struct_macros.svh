@@ -1,17 +1,8 @@
-//===========================================================
-// 所属层次：src/sv/core/cmdline（内部 include 片段，不是独立 compilation unit）。
-// schema 公共宏：生成类型 companion、字段适配和 struct/array/queue apply 入口。
-// 仅定义文本宏，展开依赖同一命名空间内已加载的 runtime/类型适配器；用户 schema 仍声明在用户作用域。
-// 用户结构体及 opaque handle 的所有权不变；宏继续在消费点传入用户文件/行号。
-// 只允许 aip_cmdline.sv 在其 include 窗口加载；拒绝直接包含，避免创建第二份 $unit/package 类型。
-// 聚合入口持有唯一的 AIP_CMDLINE_SV 防重入 guard，本文件不声明新的 package。
-// 本次仅按职责迁移定义，原有函数实现和宏展开语句保持不变。
-//===========================================================
+// schema 公共宏：生成类型 companion、字段适配及 struct/array/queue apply 入口。
+// 内部 include 片段，只能由 aip_cmdline.sv 加载（直接包含会产生第二份 $unit/package 类型）。
 `ifndef AIP_CMDLINE_INTERNAL_INCLUDE
 `AIP_CMDLINE_INTERNAL_INCLUDE_ERROR__USE_AIP_CMDLINE_SV
 `else
-// schema apply_with_compact 的上下文仅覆盖同步字段物化；嵌套 schema 正常返回时恢复父字段。
-// 顶层 apply 宏提供用户位置，字段 preamble 标识默认值错误，实际输入由消费入口更新。
 `define aip_struct_type_begin(STYPE) \
 class aip_struct_schema__``STYPE; \
     static function string schema_id(); \
@@ -90,6 +81,7 @@ class aip_struct_schema__``STYPE; \
     endfunction \
 endclass
 
+// 诊断值先标为 <default>，使默认值校验失败可定位；取到实际输入后再由字段宏更新。
 `define aip_struct_field_preamble(FIELD) \
         aip_cmdline_diagnostic::select_value({__aip_root, ".", `"FIELD`"}, "<default>"); \
         aip_struct_runtime::check_field_name(`"FIELD`"); \
@@ -131,8 +123,7 @@ endclass
                     end \
                 end \
             end else if (aip_struct_runtime::materialization_phase == aip_struct_runtime::PHASE_FIXED && __aip_from_each) begin \
-                // Reserve a typed placeholder so finite preflight knows the \
-                // target kind even before the each pass materializes values. \
+                // Reserve a typed placeholder so finite preflight knows the target kind before the each pass. \
                 __aip_value.FIELD = __aip_default; \
                 aip_struct_typed_key#(FTYPE)::record(__aip_root, `"FIELD`", __aip_value.FIELD, 1); \
             end \
@@ -250,11 +241,8 @@ endclass
             aip_struct_schema__``STYPE::apply_with_compact(__aip_key, __aip_value.FIELD, __aip_found ? __aip_raw : ""); \
         end
 
-// Array-valued schema members.  These intentionally use the same typed
-// resolver as the legacy list macros, while keeping the public key rooted at
-// the enclosing struct path (for example cfg.tags[1]).  Static members are
-// resolved through a temporary open array so VCS does not have to bind a
-// fixed unpacked array to a ref-open-array formal.
+// Array members use the same typed resolver as the legacy list macros, with keys rooted at the struct path (e.g. cfg.tags[1]).
+// Static arrays go through a temporary open array: VCS cannot bind a fixed unpacked array to a ref open-array formal.
 `define aip_field_int_sarray(FTYPE, FIELD, ELEMENT_DEFAULT=0) \
         begin : __aip_reserved_``FIELD \
             bit [0:((1 / (($bits(FTYPE) >= 1 && $bits(FTYPE) <= 1024) ? 1 : 0)) - 1)] __aip_width_guard; \
@@ -453,8 +441,7 @@ endclass
             aip_cmdline_diagnostic::pop(); \
         end
 
-// Apply a schema to each element of a fixed-size struct array.  Per-index
-// rules (ROOT[i]) take precedence over an overall comma-separated list.
+// Per-index rules (ROOT[i]) take precedence over the overall comma-separated list.
 `define aip_struct_sarray_apply(ROOT, STYPE, TARGET) \
         begin \
             string __aip_root; string __aip_overall; aip_struct_runtime::lookup_t __aip_ol; \
@@ -473,8 +460,7 @@ endclass
             aip_cmdline_diagnostic::pop(); \
         end
 
-// Apply a schema to a dynamic struct array.  The normalized .size rule is
-// evaluated once before allocation; omitted size uses DEFAULT_SIZE.
+// The .size rule is evaluated once before allocation; DEFAULT_SIZE applies when size is omitted.
 `define aip_struct_darray_apply(ROOT, STYPE, TARGET, DEFAULT_SIZE=0) \
         begin \
             string __aip_root; real __aip_default_size_real; int __aip_default_size; string __aip_overall; aip_struct_runtime::lookup_t __aip_ol; int __aip_n; STYPE __aip_sv[]; int __aip_old_n; \
@@ -496,11 +482,8 @@ endclass
             aip_cmdline_diagnostic::pop(); \
         end
 
-// Queue targets are populated through a temporary dynamic representation.
-// This avoids relying on ref queue compatibility (which differs between
-// unbounded and bounded declarations) and lets us check MAX_SIZE before any
-// push_back can overflow.  Existing records are copied first so unregistered
-// fields and opaque handles survive a repeated apply by index.
+// Built in a temporary dynamic array (ref-queue binding differs for bounded/unbounded queues; MAX_SIZE is checked
+// before any push_back). Existing records are copied first so unregistered fields and opaque handles survive re-apply.
 `define aip_struct_queue_apply(ROOT, STYPE, TARGET, DEFAULT_SIZE=0, MAX_SIZE=-1) \
         begin \
             string __aip_root; real __aip_default_size_real; real __aip_max_size_real; int __aip_default_size; int __aip_max_size; string __aip_overall; aip_struct_runtime::lookup_t __aip_ol; int __aip_n; STYPE __aip_sv[]; int __aip_rules; int __aip_controls; int __aip_fields; string __aip_flags; \

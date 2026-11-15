@@ -1,11 +1,9 @@
-# tests/tcl：真实VCS bridge watchdog/取消报告验证；只驱动life_测试命令。
-# 每个sim进程仅触发一个永久recovery场景；无测试用clear API或重新建service。
-# VCS -do不保证info script有路径，构建入口通过本次进程环境显式传入repo根目录。
+# 真实 VCS bridge watchdog/取消报告验证，只驱动 life_ 测试命令；每个 sim 进程只触发一个永久 recovery 场景。
+# VCS -do 不保证 info script 有路径，故由构建入口经环境变量传入 repo 根目录。
 set ::env(AIP_CORE) $::env(AIP_RAL_TEST_ROOT)
 source [file join $::env(AIP_RAL_TEST_ROOT) src tcl aip_cmd.tcl]
 set life_checks 0
 
-# 断言失败立即抛错，构建脚本不会得到双完成标记。
 proc life_demand {condition label} {
     if {!$condition} { error "RAL_LIFECYCLE_TCL_ASSERT $label" }
     incr ::life_checks

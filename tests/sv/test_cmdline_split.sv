@@ -1,25 +1,21 @@
-// tests/sv 层：验证 cmdline 物理拆分后仍只通过旧入口装载，公开类型与宏保持兼容。
-// 依赖原聚合文件或 aip_core_pkg；两种入口分别编译，测试对象及 override 仅存活于本次仿真。
-// 同一源码输出可过滤的随机轨迹，供拆分前后使用相同 VCS/seed 做逐字节比较。
+// cmdline 拆分后的兼容测试：仍只经旧入口装载，公开类型与宏保持兼容；输出可过滤的随机轨迹供拆分前后逐字节比较。
 `ifdef AIP_CMDLINE_SPLIT_PACKAGE
 `include "aip_core_pkg.sv"
 `include "aip_core_pkg.sv"
 `include "aip_cmdline.sv"
 `include "aip_cmdline.sv"
 
-// 独立 consumer 的参数化句柄和静态配置必须与主模块使用同一 package 类型。
-// 这里不复制解析器定义，避免只验证编译通过却遗漏静态 override 被分成两份的问题。
+// consumer 必须与主模块共用同一 package 类型（不复制解析器定义），以发现静态 override 被分成两份的问题。
 package cmdline_split_consumer_pkg;
     import aip_core_pkg::*;
 
     class cmdline_split_probe;
-        // 接收 canonical parser 句柄并设置共享 override；空句柄是测试构造错误。
         static function void install(aip_cmdline#(int) parser);
             if (parser == null) $fatal(1, "CMDLINE_SPLIT_NULL_PARSER");
             aip_cmdline_override::set_val("split.shared", "41");
         endfunction
 
-        // 主模块写回的值必须能从 consumer 读到，以检查静态状态的双向一致性。
+        // 主模块写回的值须能从 consumer 读到，检查静态状态双向一致。
         static function string read_back();
             return aip_cmdline_override::get_val("split.shared");
         endfunction
@@ -36,8 +32,7 @@ endpackage
 `AIP_CMDLINE_SPLIT_ERROR_INTERNAL_GUARD_LEAKED
 `endif
 
-// 同一组断言覆盖 scalar、schema、typed array、strict queue 和用户调用位置，
-// 从而让所有被拆出的职责至少经历一次公开入口调用，而非直接依赖内部文件。
+// 让每个拆出的职责（scalar/schema/typed array/strict queue/调用位置）都至少经公开入口调用一次。
 module test_cmdline_split;
 `ifdef AIP_CMDLINE_SPLIT_PACKAGE
     import aip_core_pkg::*;
@@ -66,8 +61,7 @@ module test_cmdline_split;
     real real_draw;
     aip_cmdline#(int) parser;
 
-    // 所有正例均同步执行；最后一次调用必须清空诊断栈，且随机采样不改变数据类型。
-    // 失败分支单独启动仿真，避免 FATAL 提前结束掩盖其后的正例覆盖。
+    // 失败分支单独启动仿真，避免 FATAL 提前结束掩盖其后的正例。
     initial begin
         aip_cmdline_print_control::configure(0, 0);
         parser = new();
@@ -111,8 +105,7 @@ module test_cmdline_split;
             $display("CMDLINE_SPLIT_TRACE index=%0d integer=%0d real=%0.16f", i, draw, real_draw);
         end
 
-        // 成功宏调用全部返回后，裸 API 不再携带用户来源；应回退到库内报错位置。
-        // 单独运行此分支，检查诊断栈没有遗留 split.cfg 或 split.values 的上下文。
+        // 宏调用全部返回后，裸 API 不再带用户来源，应回退到库内报错位置（诊断栈不能遗留 split.* 上下文）。
         if ($test$plusargs("AIP_SPLIT_DIRECT_FATAL")) begin
             bad = aip_cmdline#(int)::parse_value("not_an_int");
             $display("CMDLINE_SPLIT_UNEXPECTED_CONTINUE");

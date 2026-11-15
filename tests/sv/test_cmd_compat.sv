@@ -1,16 +1,12 @@
-// tests/sv：命令重构后的旧 SV 入口、嵌套 legacy 调用及原始参数保真回归。
-// 依赖 AIP package、UVM HDL backdoor 和 1ns 时间单位；顶层拥有 DUT 信号与
-// CPU 寄存器替身，框架拥有注册句柄和每次调用上下文。测试只使用公开 API，
-// 不写框架私有锁；取消定时 force 后显式 release，不把取消误当作资源回滚。
+// 命令重构后的旧 SV 入口、嵌套 legacy 调用及原始参数保真回归；只用公开 API，不写框架私有锁。
+// 取消定时 force 后须显式 release：取消不是资源回滚。
 `timescale 1ns/1ps
 `include "aip_core_pkg.sv"
 
-// 单寄存器替身只用于 cpu_wait 的成功/超时路径，避免把镜像文件和真实 CPU
-// 引入命令兼容门禁；寄存器对象由顶层创建并借给 CPU memory facade。
+// 单寄存器替身，只用于 cpu_wait 的成功/超时路径。
 class cmd_compat_region extends aip_cpu_region;
     bit [31:0] value;
 
-    // 固定低地址和 32-bit 宽度；测试写 value 后才启动轮询。
     function new();
         name = "compat_ready_register";
         base = 'h1000;
@@ -18,14 +14,13 @@ class cmd_compat_region extends aip_cpu_region;
         value = 0;
     endfunction
 
-    // 仅接受一个完整寄存器写入，错误访问立即失败以免制造假 ready。
+    // 错误访问立即失败，以免制造假 ready。
     virtual task write_impl(input longint unsigned off,
                             input longint unsigned data, input int width);
         if (off != 0 || width != 32) $fatal(1, "CMD_COMPAT_REGION_BAD_WRITE");
         value = data[31:0];
     endtask
 
-    // 合法读取显式返回成功，不替 cpu_wait 合成结果或跳过轮询时间。
     virtual task read_impl(input longint unsigned off,
                            output longint unsigned data, input int width,
                            output bit status_ok);
@@ -33,7 +28,6 @@ class cmd_compat_region extends aip_cpu_region;
         status_ok = (off == 0 && width == 32);
     endtask
 
-    // 满足 region 的清零契约，不创建后台工作。
     virtual task zero_all();
         value = 0;
     endtask
@@ -41,8 +35,7 @@ endclass
 
 typedef enum int {COMPAT_IDLE, COMPAT_ACTIVE} cmd_compat_mode_e;
 
-// 全部断言共享一个明确的检查器，业务 task 也能记录嵌套期间的中间状态。
-// 业务仍通过真实注册宏/dispatch 执行，不通过修改 handle 假造调用结果。
+// 业务经真实注册宏/dispatch 执行，不修改 handle 假造结果；检查器也记录嵌套期间的中间状态。
 class cmd_compat_ops;
     static int checks = 0;
     static int failures = 0;
@@ -52,7 +45,6 @@ class cmd_compat_ops;
     static process cancellable_child_process;
     static bit cancellable_child_started = 0;
 
-    // 收集正常组断言；最终顶层以 fatal 和锚定 PASS 区分成功/失败。
     static function void check(string label, bit condition);
         checks++;
         if (condition) $display("CMD_COMPAT_CHECK_PASS %s", label);
@@ -361,8 +353,7 @@ endclass
 `aip_cmd_task(compat_raw, cmd_compat_ops::raw)
 `aip_cmd_task(compat_owned_fork, cmd_compat_ops::owned_fork)
 
-// 本模块只负责场景编排和真实 HDL 所有权；使用普通 initial，避免 UVM
-// objection/report 提前结束而掩盖最后的直接 facade 和参数保真检查。
+// 用普通 initial 而非 UVM，避免 objection/report 提前结束掩盖最后的 facade 与参数保真检查。
 module test_cmd_compat;
     logic dut_signal;
     // 固件成功路径只写首个 64-bit row；其余地址不在本兼容门禁覆盖范围。
@@ -451,7 +442,6 @@ module test_cmd_compat;
                               aip_cmd::get_current_context() == null);
 
         // 成功装载必须真的到达 HDL 存储，不能只看框架返回的 loaded 字符串。
-        // fixture 文件归本测试所有，runner 的 clean 负责回收此唯一固定产物。
         rom_word[0] = 0;
         rom = new("compat_rom", 'h8000, 1);
         rom.set_path(0, 0, "test_cmd_compat.rom_word");

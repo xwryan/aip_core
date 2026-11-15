@@ -1,4 +1,4 @@
-# tests/tcl：真实 VCS 四态 X/Z watch 回归；由 Makefile 在 VCS 主机运行。
+# 真实 VCS 四态 X/Z watch 回归。
 set loader [expr {[info exists ::env(AIP_X_WATCH_LOADER)] && $::env(AIP_X_WATCH_LOADER) eq "so" ? "aip_init_so.tcl" : "aip_init.tcl"}]
 source [file join $::env(AIP_CORE) dist $loader]
 

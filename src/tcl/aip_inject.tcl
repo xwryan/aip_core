@@ -1,8 +1,6 @@
-# src/tcl：独立命令注入入口，供原 Tcl 栈暂停时插入 task/sequence。
-# 依赖 aip_sim_control.tcl 和 SV aip_inject_bridge；正常单槽 bridge 不受本模块
-# 写入。SV 拥有不可变请求、FIFO 与结果；Tcl 只持 ticket/slot 缓存，release
-# 后缓存失效。没有隐式 kill 或自动重放；timeout/交互中断后用 ticket 查状态。
-# 同绑定 FIFO，不同绑定可以并行；仿真推进会同时推进原任务和 DUT。
+# 独立命令注入入口：原 Tcl 栈暂停时插入 task/sequence，不写正常单槽 bridge。SV 持有不可变请求、FIFO 与结果，
+# Tcl 只缓存 ticket/slot（release 后失效）；无隐式 kill/自动重放，timeout 或中断后用 ticket 查状态。
+# 同绑定 FIFO、不同绑定并行；仿真推进会同时推进原任务和 DUT。
 
 if {![info exists ::_aip_inject_serial]} { set ::_aip_inject_serial 0 }
 if {![info exists ::_aip_inject_busy]} { set ::_aip_inject_busy 0 }
@@ -31,8 +29,7 @@ proc _aip_inject_allowed {} {
     }
 }
 
-# 时间选项精确换算；SV 接收32位整数ns，拒绝静默截断/溢出。0仅表示关闭
-# job期限，Tcl等待仍可另设有限期限，且不将返回交互等同业务已结束。
+# SV 接收 32 位整数 ns，拒绝静默截断/溢出；0 只关闭 job 期限（Tcl 等待仍可另设期限）。
 proc _aip_inject_timeout_ns {options default_ns} {
     set value "${default_ns}ns"
     if {[llength $options] > 1} { _aip_inject_error ARGUMENT "expected at most timeout=<duration>" }
@@ -67,9 +64,8 @@ proc _aip_inject_text {prefix length {offset 0}} {
     return $result
 }
 
-# 独立请求槽由本次调用独占，ACK只表示接收/取消/回收，不表示业务完成。
-# 若断点打断握手，finally清未消费trigger；已受理ticket仍保存在公开last变量
-# 及SV槽，可用 aip_job list 找回，绝不为错误恢复而重发一条可能已执行的命令。
+# 独立请求槽由本次调用独占；ACK 只表示接收/取消/回收，不表示业务完成。握手被断点打断时 finally 清 trigger，
+# 已受理 ticket 仍可经 aip_job list 找回，绝不为错误恢复而重发可能已执行的命令。
 proc _aip_inject_request {operation command ticket timeout_ns} {
     _aip_inject_allowed
     set length [string length $command]
@@ -224,9 +220,8 @@ proc aip_job {operation args} {
     }
 }
 
-# 普通命令在pause内自动改走注入。wait=0仍等到真正启动；希望仅受理排队
-# 时用aip_submit。同步返回结果复制到pause专属overlay，释放SV slot；原调用
-# 恢复时overlay不可见，所以不会把调试结果误认为原seq结果。
+# pause 内普通命令自动改走注入（wait=0 仍等到真正启动；只需排队用 aip_submit）。同步结果复制到 pause 专属
+# overlay 并释放 SV slot；原调用恢复后 overlay 不可见，不会被误认为原 seq 结果。
 proc _aip_inject_send {command} {
     set ::_aip_inject_last_result {}
     # op4在SV复用extract_wait，原始参数串不在Tcl分词重组；保留逗号、容器、

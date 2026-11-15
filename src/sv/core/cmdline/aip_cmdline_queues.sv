@@ -1,20 +1,11 @@
-//===========================================================
-// 所属层次：src/sv/core/cmdline（内部 include 片段，不是独立 compilation unit）。
-// 严格 primitive queue 解析：整数、字符串、real 与 enum 的槽位选择和类型化求值。
-// 依赖公共上下文、基础解析及 schema/数组适配器；外部宏负责把临时数组写回用户队列。
-// 临时数组、预检和抽样按既有流程运行；源优先级、分配预算及失败终止方式均不改变。
-// 只允许 aip_cmdline.sv 在其 include 窗口加载；拒绝直接包含，避免创建第二份 $unit/package 类型。
-// 聚合入口持有唯一的 AIP_CMDLINE_SV 防重入 guard，本文件不声明新的 package。
-// 本次仅按职责迁移定义，原有函数实现和宏展开语句保持不变。
-//===========================================================
+// 严格 primitive queue 解析（整数/字符串/real/enum）：槽位选择与类型化求值，临时数组由外部宏写回用户队列。
+// 内部 include 片段：只允许 aip_cmdline.sv 在其 include 窗口加载，拒绝直接包含以免创建第二份 $unit/package 类型。
 `ifndef AIP_CMDLINE_INTERNAL_INCLUDE
 `AIP_CMDLINE_INTERNAL_INCLUDE_ERROR__USE_AIP_CMDLINE_SV
 `else
-// Strict primitive queue adapters.  These intentionally do not call the
-// legacy list resolver: queue APIs retain its PATH/leaf source order while
-// using the accepted schema normalization, typed parsing, and allocation
-// budget.  TARGET itself never crosses a helper ref boundary; only the
-// temporary dynamic representation does.
+// Strict primitive queue adapters: they deliberately bypass the legacy list resolver, keeping its PATH/leaf
+// source order but using schema normalization, typed parsing and the allocation budget. TARGET itself never
+// crosses a helper ref boundary; only the temporary dynamic representation does.
 class aip_strict_int_queue_runtime #(type T = int);
     static function aip_svec_t strict_literal(string token, string path);
         aip_vec_t value;
@@ -52,8 +43,7 @@ class aip_strict_int_queue_runtime #(type T = int);
                 "%s invalid integral range '%s'", path, expr));
     endfunction
 
-    // 验证一个整数权重项并返回其权重是否为正；path 标识配置位置。
-    // 零权重允许禁用该项，但左值/范围仍须合法；负权重或格式错误终止解析。
+    // 返回权重是否为正；零权重可禁用该项但左值/范围仍须合法，负权重或格式错误终止解析。
     static function bit validate_weight_item(string item, string path);
         int eq_pos, slash_pos, op_pos;
         string left, right;
@@ -86,8 +76,7 @@ class aip_strict_int_queue_runtime #(type T = int);
         return weight > 0;
     endfunction
 
-    // 在整数严格解析入口完整检查所有候选，保留 expr/path 供上层来源诊断。
-    // 全组至少一个正权重，零权重不绕过逐项校验；此函数不消费 RNG。
+    // 完整检查所有候选（不消费 RNG）：全组至少一个正权重，零权重不绕过逐项校验。
     static function void validate_expr(string expr, string path);
         string s, parts[$];
         aip_svec_t start_value, end_value, step_value;
@@ -177,8 +166,7 @@ class aip_strict_int_queue_runtime #(type T = int);
         void'(strict_literal(s, path));
     endfunction
 
-    // 对整数表达式先完整校验再抽样，返回目标 T；错误保留完整原文与失败子项。
-    // 临时诊断帧在正常返回时弹出，不遗留上次字段位置，也不额外消费 RNG。
+    // 先完整校验再抽样；诊断帧正常返回时弹出，不额外消费 RNG。
     static function T draw_strict(string expr, string path);
         T result;
         aip_cmdline_diagnostic::push_value(path, expr);
@@ -189,11 +177,9 @@ class aip_strict_int_queue_runtime #(type T = int);
         return result;
     endfunction
 
-    // Return a winner's single final typed value without invoking a random
-    // resolver.  Multiple raw spellings that cast to the same T value are
-    // still deterministic; genuinely multi-valued or non-enumerable rules
-    // stay on the normal materialize-and-check path.
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
+    // Return a winner's single final typed value without a random resolver (several raw spellings casting to
+    // the same T stay deterministic); multi-valued or non-enumerable rules use the materialize-and-check path.
+    // 公开入口为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
     static function bit deterministic_value(
         aip_struct_runtime::lookup_t winner,
         T default_val,
@@ -206,8 +192,7 @@ class aip_strict_int_queue_runtime #(type T = int);
         return result;
     endfunction
 
-    // 无随机抽样地判断 winner 经 T 类型转换后是否只有一个候选值；缺失时使用默认值。
-    // 不确定表达式返回 0，非法候选在外层绑定的具体索引上下文中 fatal。
+    // 不确定表达式返回 0；非法候选在外层绑定的具体索引上下文中 fatal。
     protected static function bit deterministic_value_impl(
         aip_struct_runtime::lookup_t winner,
         T default_val,
@@ -237,12 +222,9 @@ class aip_strict_int_queue_runtime #(type T = int);
         return 1;
     endfunction
 
-    // Prove finite unique capacity before any `.each` draw.  Raw candidates
-    // are bounded by finite_candidate_tokens(); only after that cutoff are
-    // they cast to T and deduplicated.  Unknown randomized fixed winners make
-    // this check conservative, while deterministic fixed winners are checked
-    // for collisions and removed from the available each set.
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
+    // Prove finite unique capacity before any `.each` draw: raw candidates are bounded by
+    // finite_candidate_tokens() before casting to T and deduplicating; unknown randomized fixed winners make
+    // this conservative, deterministic ones are collision-checked and removed from the available each set.
     static function void preflight_unique(
         string path,
         string each_expr,
@@ -254,8 +236,7 @@ class aip_strict_int_queue_runtime #(type T = int);
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 预检固定整数值冲突及 each 可用候选数，先按 T 转换去重且不消费随机数。
-    // 无法有限枚举的表达式留给后续有界重抽，正常返回由包装层恢复诊断上下文。
+    // 无法有限枚举的表达式留给后续有界重抽。
     protected static function void preflight_unique_impl(
         string path,
         string each_expr,
@@ -319,7 +300,6 @@ class aip_strict_int_queue_runtime #(type T = int);
                 path, available, each_slots));
     endfunction
 
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
     static function void resolve(string full_root, string leaf_root,
                                  T default_val, int max_size,
                                  ref T arr[]);
@@ -328,8 +308,7 @@ class aip_strict_int_queue_runtime #(type T = int);
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 按队列既有 PATH/leaf 来源优先级确定大小及各槽位，先检查容量再生成 T 数组。
-    // unique 模式先物化固定值再抽 each；控制与候选分别记录原文，失败立即 fatal。
+    // 按队列既有 PATH/leaf 来源优先级确定大小与各槽位，先查容量再生成 T 数组；unique 模式先物化固定值再抽 each。
     protected static function void resolve_impl(string full_root, string leaf_root,
                                  T default_val, int max_size,
                                  ref T arr[]);
@@ -510,7 +489,6 @@ endclass
 // 字符串队列将控制键与实际 winner 分开记录，避免后查询的 .sort 掩盖前一项错误；
 // 入口和逐元素抽样使用同步栈，直接调用 runtime 也不会沿用此前宏的来源。
 class aip_strict_string_queue_runtime;
-    // 判断文本是否声明了字符串队列不支持的 seq/perm 生成器；不解析和消费随机数。
     static function bit unsupported_generator(string text);
         string s;
         s = aip_str::lower(aip_str::strip(text));
@@ -518,7 +496,6 @@ class aip_strict_string_queue_runtime;
                 (s.len() >= 5 && s.substr(0,4) == "perm:"));
     endfunction
 
-    // 为整个队列解析建立临时上下文，输出动态数组；所有失败由公共 fatal 处理。
     // 调用者未提供宏来源时只继承当前有效上下文，不保存跨调用的全局状态。
     static function void resolve(string full_root, string leaf_root,
                                  string default_val, int max_size,
@@ -528,8 +505,7 @@ class aip_strict_string_queue_runtime;
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 对单个 winner 保留完整表达式和逻辑槽位，再执行字符串随机/转义解析。
-    // 正常返回恢复队列控制项上下文，非法引号或转义在当前用户调用位置 fatal。
+    // 非法引号或转义在当前用户调用位置 fatal。
     static function string draw(string expr, string path);
         string result;
         aip_cmdline_diagnostic::push_value(path, expr);
@@ -538,8 +514,7 @@ class aip_strict_string_queue_runtime;
         return result;
     endfunction
 
-    // 按 overall/each/index 优先级解析字符串队列；每个校验前选择对应原始值，
-    // 保持既有大小推导、唯一性和排序语义，错误不返回半构造数组。
+    // 按 overall/each/index 优先级解析；每次校验前选择对应原始值，错误不返回半构造数组。
     static function void resolve_impl(string full_root, string leaf_root,
                                  string default_val, int max_size,
                                  ref string arr[]);
@@ -706,7 +681,6 @@ class aip_strict_real_queue_runtime;
                 (s.len() >= 5 && s.substr(0,4) == "perm:"));
     endfunction
 
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
     static function void resolve(string full_root, string leaf_root,
                                  real default_val, int max_size,
                                  ref real arr[]);
@@ -715,8 +689,7 @@ class aip_strict_real_queue_runtime;
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 按队列既有 PATH/leaf 来源优先级生成 real 临时数组，检查容量、表达式及唯一性。
-    // 拒绝 seq/perm，校验或抽样前选择对应控制/槽位原文，外层统一恢复诊断帧。
+    // 生成 real 临时数组（拒绝 seq/perm），检查容量、表达式及唯一性。
     protected static function void resolve_impl(string full_root, string leaf_root,
                                  real default_val, int max_size,
                                  ref real arr[]);
@@ -887,8 +860,7 @@ endclass
 
 // 枚举队列保留字段/槽位和原始候选串，预检与抽样共享诊断来源，非法候选立即终止。
 class aip_strict_enum_queue_runtime #(type E = int);
-    // 将一个候选名称映射到 E；完整原文由上层保留，本层仅补充当前子表达式。
-    // 名称忽略大小写，未知名称通过公共 fatal 报出逻辑路径而不返回伪造默认值。
+    // 名称忽略大小写；未知名称经公共 fatal 报出逻辑路径，不返回伪造默认值。
     static function bit parse_name(
         string token,
         string path,
@@ -909,8 +881,7 @@ class aip_strict_enum_queue_runtime #(type E = int);
         return 0;
     endfunction
 
-    // 在同步子上下文内校验并抽样枚举表达式，直接 API 调用也保留完整原文；
-    // 所有候选都先校验，故无论随机种子为何均可发现非法名称。
+    // 所有候选先校验，无论随机种子如何都能发现非法名称。
     static function E draw(string expr, string path,
                            input string names[$],
                            input logic [1023:0] bits[$]);
@@ -921,7 +892,6 @@ class aip_strict_enum_queue_runtime #(type E = int);
         return result;
     endfunction
 
-    // 执行已建立来源的候选解析，返回一个合法 E；空串、坏分隔符和非法名称 fatal。
     static function E draw_impl(string expr, string path,
                            input string names[$],
                            input logic [1023:0] bits[$]);
@@ -950,8 +920,7 @@ class aip_strict_enum_queue_runtime #(type E = int);
         return candidates[$urandom_range(candidates.size()-1)];
     endfunction
 
-    // 预检固定 winner 是否只有一个不同的枚举值；缺失 winner 使用默认值，
-    // 非确定性表达式返回 0；解析错误先选择该 winner 原文以定位具体索引。
+    // 固定 winner 只有一个枚举值时返回 1（缺失用默认值），非确定性表达式返回 0。
     static function bit deterministic_value(
         aip_struct_runtime::lookup_t winner,
         E default_val,
@@ -988,8 +957,7 @@ class aip_strict_enum_queue_runtime #(type E = int);
         return 1;
     endfunction
 
-    // 预检唯一性：固定值冲突或 .each 可用候选不足直接 fatal，预检不消费随机数。
-    // 固定 winner 与 each 分别记录原始输入，避免报错落到此前处理的其他槽位。
+    // 固定值冲突或 .each 可用候选不足直接 fatal（不消费随机数）；固定 winner 与 each 分别记录原文以准确定位。
     static function void preflight_unique(
         string path,
         string each_expr,
@@ -1060,7 +1028,6 @@ class aip_strict_enum_queue_runtime #(type E = int);
                 path, available, each_slots));
     endfunction
 
-    // 只识别枚举队列不支持的 seq/perm 前缀，不改变表达式或随机状态。
     static function bit unsupported_generator(string text);
         string s;
         s = aip_str::lower(aip_str::strip(text));
@@ -1068,7 +1035,6 @@ class aip_strict_enum_queue_runtime #(type E = int);
                 (s.len() >= 5 && s.substr(0,4) == "perm:"));
     endfunction
 
-    // 给整个枚举队列解析建立同步诊断上下文，正常返回时恢复调用方来源。
     // 输出数组仅在全部控制键、默认枚举和候选合法时才交给宏拷贝。
     static function void resolve(string full_root, string leaf_root,
                                  E default_val, int max_size,
@@ -1080,8 +1046,7 @@ class aip_strict_enum_queue_runtime #(type E = int);
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 按既有规则推导大小、选择 winner、执行唯一性和排序；各失败点先切换到对应
-    // 控制键或候选原文，fatal 不允许调用方继续使用部分解析结果。
+    // 各失败点先切换到对应控制键或候选原文再 fatal，调用方不会拿到部分解析结果。
     static function void resolve_impl(string full_root, string leaf_root,
                                  E default_val, int max_size,
                                  input string names[$],

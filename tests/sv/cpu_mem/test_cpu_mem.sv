@@ -1,34 +1,10 @@
-//===========================================================
-// test_cpu_mem.sv — aip_cpu_mem 完整功能测试
-//
-// 覆盖:
-//   T1: ROM 双 path 显式 — 64-bit 对齐写读
-//   T2: ROM 128-bit logical-line / interleaved physical mapping
-//   T3: ROM 非对齐 + 32/8 bit 宽度
-//   T4: ROM load_hex 加载
-//   T5: RAM 模板路径注册 — 64-bit 写读 (含 even XOR parity)
-//   T6: RAM 低/高64 交织 + even/odd lane 共用物理 row
-//   T7: RAM 跨 physical depth 与 u01/u00
-//   T8: RAM 跨 block 边界
-//   T9: RAM parity 注错 → read 返回 status_ok=0
-//   T10: 地址越界检查
-//
-// 编译运行:
-//   cd tests/sv/cpu_mem
-//   make
-//===========================================================
+// aip_cpu_mem 完整功能测试（T1–T15）：ROM/RAM 显式与模板路径、128-bit logical-line 交织映射、非对齐与多宽度访问、
+// load_hex、parity 注错、批量归零、块/ROM 索引及越界检查。
 `include "aip_core_pkg.sv"
 `include "aip_cpu_mem.sv"
 
-// ============================================================
-// 假 RAM/ROM 模块 — 模拟 RTL 存储 array
-// ============================================================
-
 `include "fake_mem.sv"
 
-// ============================================================
-// Testbench
-// ============================================================
 module tb;
 
     // ROM 双 path
@@ -81,9 +57,7 @@ module tb;
     aip_cpu_rom_region rom0;
     aip_cpu_ram_region ram0;
 
-    // ============================================================
     // T1: ROM 64-bit 对齐写读
-    // ============================================================
     task automatic test_t1_rom_basic();
         longint unsigned d;
         bit ok;
@@ -99,9 +73,7 @@ module tb;
         `CHECK_EQ(tb.uu1.mem_core_array[0], 64'h1122_3344_5566_7788, "T1.physical uu1[0]")
     endtask
 
-    // ============================================================
     // T2: ROM 128-bit logical-line / interleaved physical mapping
-    // ============================================================
     task automatic test_t2_rom_interleave_mapping();
         longint unsigned d;
         bit ok;
@@ -121,9 +93,7 @@ module tb;
         `CHECK_EQ(tb.uu1.mem_core_array[2047], 64'hFFEE_DDCC_BBAA_9988, "T2.physical uu1[2047]")
     endtask
 
-    // ============================================================
     // T3: ROM 非对齐 + 32/8 bit
-    // ============================================================
     task automatic test_t3_rom_unaligned();
         longint unsigned d;
         bit [31:0] d32;
@@ -151,9 +121,7 @@ module tb;
         `CHECK_EQ(d, 64'h1234_5678_AABB_5ADD, "T3.64 after 8-bit RMW")
     endtask
 
-    // ============================================================
     // T4: ROM load_hex
-    // ============================================================
     task automatic test_t4_rom_load_hex();
         longint unsigned d;
         bit ok;
@@ -179,9 +147,7 @@ module tb;
         `CHECK_EQ(d, 64'h00FF_00FF_00FF_00FF, "T4.hex line 2")
     endtask
 
-    // ============================================================
     // T5: RAM 64-bit 写读 (含 even XOR parity)
-    // ============================================================
     task automatic test_t5_ram_basic();
         longint unsigned d;
         bit ok;
@@ -194,9 +160,7 @@ module tb;
         `CHECK_TRUE(tb.blk0.uu0.mem_core_array[0] != 148'd0, "T5.physical row non-zero")
     endtask
 
-    // ============================================================
     // T6: RAM 低/高64 交织 + even/odd lane
-    // ============================================================
     task automatic test_t6_ram_interleave_lanes();
         longint unsigned d;
         bit ok;
@@ -226,9 +190,7 @@ module tb;
         `CHECK_EQ(d, 64'hAAAA_BBBB_CCCC_DDDD, "T6.line1 low64 uu0 odd-lane read")
     endtask
 
-    // ============================================================
     // T7: RAM 跨 physical depth 255→256 与 u01→u00
-    // ============================================================
     task automatic test_t7_ram_depth_ram_transition();
         longint unsigned d;
         bit ok;
@@ -248,9 +210,7 @@ module tb;
         `CHECK_EQ(d, 64'hBBBB_BBBB_BBBB_BBBB, "T7.0x2000 low64 uu0[256] read")
     endtask
 
-    // ============================================================
     // T8: RAM 跨 block 边界 (0x4000)
-    // ============================================================
     task automatic test_t8_ram_block_boundary();
         longint unsigned d;
         bit ok;
@@ -268,9 +228,7 @@ module tb;
         `CHECK_EQ(d, 64'hEEEE_EEEE_EEEE_EEEE, "T8.blk3 first")
     endtask
 
-    // ============================================================
     // T9: RAM parity 注错 → status_ok=0
-    // ============================================================
     task automatic test_t9_ram_parity_err();
         longint unsigned d;
         bit ok;
@@ -292,9 +250,7 @@ module tb;
         tb.blk0.uu0.mem_core_array[0] = orig;
     endtask
 
-    // ============================================================
     // T11: RAM 显式 write8/write32/write64 + block 接口
-    // ============================================================
     task automatic test_t11_ram_widths();
         longint unsigned d;
         bit [31:0] d32;
@@ -303,11 +259,9 @@ module tb;
         longint unsigned blk_in[$], blk_out[$];
         $display("\n=========== T11: RAM 显式 8/32/64 ===========");
 
-        // 清行
         cpu0.write64('h8000_0100, 64'h0);
         cpu0.write64('h8000_0108, 64'h0);
 
-        // 8-bit 写读
         cpu0.write8('h8000_0100, 8'hA5);
         cpu0.read8 ('h8000_0100, d8, ok);
         `CHECK_EQ(d8, 8'hA5, "T11.ram write8/read8")
@@ -319,7 +273,6 @@ module tb;
         `CHECK_EQ(d32, 32'hCAFE_BABE, "T11.ram write32/read32")
         `CHECK_TRUE(ok, "T11.ram write32 parity ok")
 
-        // 64-bit 显式
         cpu0.write64('h8000_0108, 64'h1122_3344_5566_7788);
         cpu0.read64 ('h8000_0108, d, ok);
         `CHECK_EQ(d, 64'h1122_3344_5566_7788, "T11.ram write64/read64")
@@ -335,7 +288,6 @@ module tb;
         cpu0.read8  ('h8000_0117, d8, ok);
         `CHECK_EQ(d8, 8'hAA, "T11.read byte 7 of 64")
 
-        // block 批量
         blk_in.push_back(64'h1111_1111_1111_1111);
         blk_in.push_back(64'h2222_2222_2222_2222);
         blk_in.push_back(64'h3333_3333_3333_3333);
@@ -346,12 +298,10 @@ module tb;
         `CHECK_EQ(blk_out[1], 64'h2222_2222_2222_2222, "T11.block[1]")
         `CHECK_EQ(blk_out[2], 64'h3333_3333_3333_3333, "T11.block[2]")
 
-        // write_incr
         cpu0.write_incr('h8000_0300, 4, 64'h100, 64);
         cpu0.read64('h8000_0318, d, ok);
         `CHECK_EQ(d, 64'h103, "T11.write_incr [3]")
 
-        // write_zero
         cpu0.write_zero('h8000_0400, 16);
         cpu0.read64('h8000_0400, d, ok);
         `CHECK_EQ(d, 64'h0, "T11.write_zero word0")
@@ -359,16 +309,13 @@ module tb;
         `CHECK_EQ(d, 64'h0, "T11.write_zero word1")
     endtask
 
-    // ============================================================
     // T12: 批量归零 — region 级 + 范围级 + facade 全清
-    // ============================================================
     task automatic test_t12_zero();
         longint unsigned d;
         bit ok;
         int nonzero;
         $display("\n=========== T12: 批量归零 ===========");
 
-        // 先填几个 word
         cpu0.write64('h0000_0000, 64'hFFFF_FFFF_FFFF_FFFF);
         cpu0.write64('h0000_4000, 64'hAAAA_BBBB_CCCC_DDDD);
         cpu0.write64('h8000_0000, 64'h1234_5678_9ABC_DEF0);
@@ -421,9 +368,7 @@ module tb;
         `CHECK_EQ(d, 64'h0, "T12.zero_all ram")
     endtask
 
-    // ============================================================
     // T13: blk_id_offset — RTL 索引从非 0 开始
-    // ============================================================
     task automatic test_t13_blk_offset();
         aip_cpu_mem        cpu_x;
         aip_cpu_ram_region ram_x;
@@ -441,7 +386,6 @@ module tb;
             .blk_id_offset (5)
         );
 
-        // 验证路径生成正确
         `CHECK_TRUE(ram_x.get_path(0, 0) == "tb.bar[5].u.uu0.mem_core_array",
                     "T13.path blk0 ram0")
         `CHECK_TRUE(ram_x.get_path(1, 0) == "tb.bar[6].u.uu0.mem_core_array",
@@ -449,7 +393,7 @@ module tb;
         `CHECK_TRUE(ram_x.get_path(2, 1) == "tb.bar[7].u.uu1.mem_core_array",
                     "T13.path blk2 ram1")
 
-        // 实际写读 — 验证物理落到 bar[5..7]
+        // 物理须落到 bar[5..7]
         cpu_x.write64('h9000_0000, 64'hAAAA_1111_BBBB_2222);          // blk 0 → bar[5].uu0
         cpu_x.write64('h9000_4000, 64'hCCCC_3333_DDDD_4444);          // blk 1 → bar[6].uu0
         cpu_x.write64('h9000_8000, 64'hEEEE_5555_FFFF_6666);          // blk 2 → bar[7].uu0
@@ -477,9 +421,7 @@ module tb;
                     "T13.physical bar[5] uu0[256] non-zero")
     endtask
 
-    // ============================================================
     // T14: add_rom_id — RTL ROM 带索引名 (dut.rom[3].uu0)
-    // ============================================================
     task automatic test_t14_rom_id();
         aip_cpu_mem        cpu_y;
         aip_cpu_rom_region rom_y;
@@ -496,13 +438,11 @@ module tb;
             .ram1_path_fmt ("tb.rom_arr[%0d].uu1.mem_core_array")
         );
 
-        // path 生成正确
         `CHECK_TRUE(rom_y.get_path(0, 0) == "tb.rom_arr[3].uu0.mem_core_array",
                     "T14.path uu0")
         `CHECK_TRUE(rom_y.get_path(0, 1) == "tb.rom_arr[3].uu1.mem_core_array",
                     "T14.path uu1")
 
-        // 写读
         cpu_y.write64('hB000_0000, 64'h1234_5678_AAAA_BBBB);          // ram0
         cpu_y.write64('hB000_4000, 64'hDEAD_BEEF_CAFE_BABE);          // line 1024 low 64 -> uu0[1024]
         cpu_y.read64 ('hB000_0000, d, ok);
@@ -517,9 +457,7 @@ module tb;
                   "T14.physical rom_arr[3].uu0[1024]")
     endtask
 
-    // ============================================================
     // T10: 地址越界
-    // ============================================================
     task automatic test_t10_oob();
         longint unsigned d;
         bit ok;
@@ -534,11 +472,8 @@ module tb;
         `CHECK_TRUE(1, "T10.no crash on oob")
     endtask
 
-    // ============================================================
-    // T15: load_hex range guard — combined hex self-routes per region
-    //   A combined hex with an @segment inside the region and one outside.
-    //   Each region must keep only its own @segment (basis of ram_jump boot).
-    // ============================================================
+    // T15: load_hex range guard — a combined hex self-routes per region; each region keeps only
+    // its own @segment (basis of ram_jump boot).
     task automatic test_t15_range_guard();
         bit [31:0] d32;
         bit ok;
@@ -567,9 +502,6 @@ module tb;
         `CHECK_TRUE(ram0.contains('h0000_0000) == 0, "T15.ram skips out-of-range @segment")
     endtask
 
-    // ============================================================
-    // Main
-    // ============================================================
     initial begin
         $display("\n############# test_cpu_mem start #############");
         #1;

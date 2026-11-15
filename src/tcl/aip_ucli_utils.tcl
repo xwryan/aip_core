@@ -1,25 +1,8 @@
-# src/tcl：UCLI信号、存储器与流程辅助库，可独立加载或随AIP统一入口加载。
-# force/release对象归仿真器所有；本文件不拥有SV命令请求。完整AIP加载时，
-# 所有辅助推进都经过控制层；真实 pause% 中允许有限调试推进，普通回调和
-# 嵌套推进仍被拒绝。pulse/reset_dut 自己拥有临时信号 force 的恢复责任。
-#================================================================
-# AIP UCLI Utility Library
-#
-# VCS UCLI TCL helpers — force/deposit/get/release + run flow control
-# + memory dump/load + breakpoints + dump-fsdb + batch.
-#
-# Usage:
-#   simv -ucli -i aip_ucli_utils.tcl
-# OR within a TCL script:
-#   source aip_ucli_utils.tcl
-#
-# Coexists with aip_cmd.tcl (does not touch `unknown`).
-#================================================================
+# UCLI 信号/存储器/流程辅助库，可独立加载，也可与 aip_cmd.tcl 共存（不碰 unknown）。
+# 完整 AIP 加载时辅助推进都经控制层：真实 pause% 中允许有限调试推进，普通回调和嵌套推进仍被拒绝。
 
-# ---------- Global config ----------
 set ::fv_verbose 1   ;# 0=quiet, 1=normal, 2=debug
 
-# 颜色 (跟 aip_cmd.tcl 风格统一)
 array set ::_aip_color {
     info  "\033\[38;5;117m"
     warn  "\033\[38;5;214m"
@@ -28,10 +11,8 @@ array set ::_aip_color {
     reset "\033\[0m"
 }
 
-# 抓 caller 文件:行
-# 1. info frame stack walk source frame: source 子脚本能拿到 file:line
-# 2. fallback aip_cmd.tcl 的 _aip_caller_info: -dofile 模式拿 path 无 line
-# (VCS -dofile do.tcl eval 逐行执行, 原脚本 line 信息丢失, 是 VCS 限制)
+# 调用者 file:line，取自最近的用户 source 帧；-dofile 模式下 VCS 逐行 eval、行号丢失，
+# 只能退回 aip_cmd.tcl 的 _aip_caller_info 取路径。
 proc _aip_caller_with_line {} {
     set depth [info frame]
     for {set i [expr {$depth - 1}]} {$i > 0} {incr i -1} {
@@ -58,8 +39,7 @@ proc _aip_caller_with_line {} {
     return ""
 }
 
-# 把 "1234000 ps" / "1234567 fs" / "5 ns" 等统一转 "X.XXX ns" (6 位小数, trailing zero 保留)
-# 不识别格式时原样返回
+# 任意单位时间转 "X.XXX ns"，不识别时原样返回。
 proc _aip_format_time_ns {t} {
     if {![regexp {^\s*([0-9]+(?:\.[0-9]+)?)\s*(fs|ps|ns|us|ms|s)\s*$} $t _ n unit]} {
         return $t
@@ -70,9 +50,7 @@ proc _aip_format_time_ns {t} {
     return [format "%.3f ns" $ns]
 }
 
-# 拿仿真时间: 优先 UCLI 原生 senv time (永远可用, 不依赖 SV bridge),
-# 兜底 aip_cmd.tcl 的 _aip_sim_time (依赖 SV aip_tcl_bridge run_loop, 否则返 "0")
-# 返回统一 "X.XXX ns" 格式
+# 优先 UCLI 原生 senv time（不依赖 SV bridge），兜底 aip_cmd.tcl 的 _aip_sim_time。
 proc _aip_get_sim_time {} {
     set raw ""
     if {![catch {set t [senv time]} _]} {
@@ -86,8 +64,7 @@ proc _aip_get_sim_time {} {
     return [_aip_format_time_ns $raw]
 }
 
-# 统一日志格式 (跟 aip_cmd.tcl `[tcl_cmd] caller @ time: msg` 风格对齐)
-# 颜色区分 level (info=绿 / warn=黄 / error=红 / debug=灰)
+# 与 aip_cmd.tcl 的 [tcl_cmd] 回显保持同一格式。
 proc _aip_msg {level msg} {
     if {[info exists ::aip_echo] && !$::aip_echo} return
 
@@ -104,7 +81,6 @@ proc _aip_msg {level msg} {
     puts "${color}\[ucli\]${prefix}: ${msg}${reset}"
 }
 
-# _fv_log: verbose-gated wrapper (level 1 → info, level 2 → debug)
 proc _fv_log {level msg} {
     if {$::fv_verbose < $level} return
     if {$level >= 2} {
@@ -114,19 +90,11 @@ proc _fv_log {level msg} {
     }
 }
 
-#================================================================
-# utils_silent / utils_loud — 关闭/打开 VCS UCLI 命令回显
-#
-# 默认 -do <script.tcl> 会逐行打印 "ucli% <cmd>" 跟命令内容,
-# 跟 utils 的彩色输出混在一起读起来累。
-#
-#   utils_silent       ;# 关 ucli% prompt + 关命令行回显
-#   utils_loud         ;# 恢复
-#================================================================
+# 关闭/恢复 VCS UCLI 命令回显：-do 默认逐行打印 "ucli% <cmd>"，与 utils 的彩色输出混在一起难读。
 proc utils_silent {} {
     catch { set ::tcl_prompt1 ::list }
     catch { config -cmdecho off }
-    # 安装 run wrapper 让 run/step/next 跑完仍显式打印时间 (cmdecho off 关掉了 result echo)
+    # cmdecho off 也关掉了结果回显，故包装 run/step/next 以继续打印时间。
     _install_run_wrapper
     _aip_msg info "utils_silent: UCLI command echo disabled (run/step 时间仍显示)"
 }
@@ -138,13 +106,8 @@ proc utils_loud {} {
     _aip_msg info "utils_loud: UCLI command echo enabled"
 }
 
-#================================================================
-# aip_output_help — AIP Tcl/UCLI output-control reference
-#
-# Keep this as a plain Tcl command (rather than an SV bridge command): all
-# controls below are local interpreter settings and the help must remain
-# available even when ::aip_echo is disabled.
-#================================================================
+# Plain Tcl rather than an SV bridge command: these are local interpreter settings and the
+# help must stay available with ::aip_echo off.
 proc aip_output_help {} {
     puts "================================================================"
     puts " AIP Tcl/UCLI output controls"
@@ -177,14 +140,11 @@ proc aip_output_help {} {
     puts "================================================================"
 }
 
-# 把外层 UCLI run/step/next 包一层, silent 模式下跑完显式 puts time
-# 不包 _vcs_run (aip_cmd.tcl 内 run proc 调 _vcs_run, 会重复打印)
-# aip_cmd.tcl loaded 时: aip_cmd 自己的 run proc 已 puts bridge 时间, 跳过 run wrap 避免双行
-# 内部 _aip_safe_run 在完整AIP模式下使用统一推进层，不重定向暂停提示符。
+# silent 模式下包装 run/step/next，跑完显式打印时间。不包 _vcs_run；aip_cmd.tcl 已加载时
+# 也不包 run（其 run proc 已打印时间），避免重复。
 proc _install_run_wrapper {} {
     set bases {step next}
     if {[info commands ::aip_send_cmd] eq ""} {
-        # aip_cmd.tcl 未加载, 我们包 run
         lappend bases run
     }
     foreach base $bases {
@@ -209,13 +169,8 @@ proc _uninstall_run_wrapper {} {
     }
 }
 
-#================================================================
-# _fv_escape_path: variable substitution for loop vars
-#   {var}  → val    (path value 直接含 [val])
-#
-# Note: TCL 源代码层面 user 必须自己 escape `[` `]` (\[N\] 或 {path[N]})。
-#       本函数不再加 backslash, 因 UCLI 接受 path 字符串字面值。
-#================================================================
+# 把路径里的 {i}/{j} 等循环变量替换成 [值]。不加反斜杠（UCLI 按字面接受路径），
+# 但 Tcl 源码里的 [] 仍须调用者自行转义：\[N\] 或 {path[N]}。
 proc _fv_escape_path {path {vars {}}} {
     set result $path
     dict for {name val} $vars {
@@ -224,9 +179,6 @@ proc _fv_escape_path {path {vars {}}} {
     return $result
 }
 
-#================================================================
-# _fv_parse_opts: parse -flag value pairs from args
-#================================================================
 proc _fv_parse_opts {arglist defaults} {
     set opts $defaults
     set i 0
@@ -254,13 +206,7 @@ proc _fv_parse_opts {arglist defaults} {
     return $opts
 }
 
-#================================================================
-# _fv_format_val: 把数值规格化为 UCLI force 接受的 SV 字面量
-#   42       → 32'd42
-#   0xABCD   → 32'hABCD
-#   0b1010   → 32'b1010
-#   32'hAB   → 32'hAB    (原样)
-#================================================================
+# 数值规格化为 UCLI force 接受的 SV 字面量：42→32'd42，0xAB→32'hAB，0b10→32'b10，SV 字面量原样。
 proc _fv_format_val {val} {
     set v [string trim $val]
     if {[regexp {^[0-9]*'[hdbHDB]} $v]} { return $v }
@@ -270,9 +216,6 @@ proc _fv_format_val {val} {
     return $v
 }
 
-#================================================================
-# _fv_do: execute single force/deposit/release
-#================================================================
 proc _fv_do {escaped_path val mode} {
     set fval [_fv_format_val $val]
     if {[catch {
@@ -286,15 +229,11 @@ proc _fv_do {escaped_path val mode} {
     }
 }
 
-#================================================================
-# _fv_release_native: 尝试多种 UCLI release 语法 (兼容不同 VCS 版本)
-#================================================================
+# 依次尝试多种 release 语法，兼容不同 VCS 版本。
 proc _fv_release_native {escaped_path} {
-    # 试 1: UCLI release builtin (uplevel to avoid recursion if shadowed)
+    # 经 uplevel #0 调 ::release，避免被同名 proc 遮蔽时递归。
     if {[catch { uplevel #0 [list ::release $escaped_path] } e1]} {
-        # 试 2: force -release
         if {[catch { force -release $escaped_path } e2]} {
-            # 试 3: force -cancel (some VCS)
             if {[catch { force -cancel $escaped_path } e3]} {
                 error "release: 所有方式都失败 ($e1 | $e2 | $e3)"
             }
@@ -302,18 +241,11 @@ proc _fv_release_native {escaped_path} {
     }
 }
 
-#================================================================
-# _fv_is_numeric: 判定字符串是否纯数字
-#================================================================
 proc _fv_is_numeric {s} {
     return [regexp {^-?[0-9]+$} $s]
 }
 
-#================================================================
-# _parse_sv_value: parse SV literal 到 TCL int
-#   支持: 32'hAB, 'b01010, 8'd255, 'd123, 纯整数
-#   X/Z 视为 0
-#================================================================
+# SV 字面量（'h/'d/'b/'o 或十进制）转整数，X/Z 位按 0 处理；无法识别返回空串。
 proc _parse_sv_value {raw} {
     set v [string trim $raw]
     if {[regexp {^[0-9]*'[hH]([0-9a-fA-FxXzZ]+)$} $v _ hex]} {
@@ -338,9 +270,6 @@ proc _parse_sv_value {raw} {
     return ""
 }
 
-#================================================================
-# fv — single signal force/deposit
-#================================================================
 proc fv {path val args} {
     set opts [_fv_parse_opts $args {mode deposit}]
     set escaped [_fv_escape_path $path]
@@ -350,9 +279,6 @@ proc fv {path val args} {
     _fv_log 1 "fv: $mode $path = $val"
 }
 
-#================================================================
-# fv_bit — bit/bit-range force/deposit
-#================================================================
 proc fv_bit {path bit_range val args} {
     if {![regexp {^[0-9]+(:[0-9]+)?$} $bit_range]} {
         error "fv_bit: invalid bit range '$bit_range' (expect N or HI:LO)"
@@ -367,9 +293,6 @@ proc fv_bit {path bit_range val args} {
     _fv_log 1 "fv_bit: $mode ${path}\[$bit_range\] = $val"
 }
 
-#================================================================
-# fv_fill — loop fill with force/deposit
-#================================================================
 proc fv_fill {path val count args} {
     set opts [_fv_parse_opts $args {
         mode deposit
@@ -421,9 +344,6 @@ proc fv_fill {path val count args} {
     }
 }
 
-#================================================================
-# fv_random — random fill
-#================================================================
 proc fv_random {path count args} {
     set opts [_fv_parse_opts $args {
         mode deposit  from 0  step 1  width 32  seed -1
@@ -457,23 +377,12 @@ proc fv_random {path count args} {
     _fv_log 1 "fv_random: $mode ${path} \[$start:$step:$end_i\], $count entries, width=$width"
 }
 
-#================================================================
-# Quick aliases
-#================================================================
 proc fv_zero {path count args} { fv_fill $path 0 $count {*}$args }
 proc fv_ones {path count args} { fv_fill $path 32'hFFFFFFFF $count {*}$args }
 proc fv_incr {path count args} { fv_fill $path 0 $count -val_step 1 {*}$args }
 
-#================================================================
-# fv_at / gv_at — base path + index 分开传, proc 内拼接
-#
-# 避免 user 在 TCL source 层写 `[]` 被命令替换误解析
-#
-#   fv_at tb.dut.mem 5 32'hAA           ;# 等同 fv {tb.dut.mem[5]} 32'hAA
-#   fv_at tb.dut.mem 5 1 -force
-#   gv_at tb.dut.mem 5 -hex             ;# 读
-#   fv_at_bit tb.dut.cfg_reg 7 1        ;# bit 操作
-#================================================================
+# base 与 index 分开传、在 proc 内拼接，免得 Tcl 源码中的 [] 被当作命令替换。
+# 例：fv_at tb.dut.mem 5 32'hAA 等同 fv {tb.dut.mem[5]} 32'hAA。
 proc fv_at {base idx val args} {
     fv "${base}\[$idx\]" $val {*}$args
 }
@@ -487,9 +396,6 @@ proc fv_at_release {base idx} {
     fv_release "${base}\[$idx\]"
 }
 
-#================================================================
-# gv — get value with auto-escape, radix
-#================================================================
 proc gv {path args} {
     set radix "dec"
     foreach a $args {
@@ -513,10 +419,7 @@ proc gv {path args} {
     }
 }
 
-#================================================================
-# fv_release — release force on a signal (avoid name clash with UCLI release)
-# Also expose as `unforce` alias
-#================================================================
+# Named fv_release to avoid clashing with UCLI's native release; unforce is an alias.
 proc fv_release {path} {
     set escaped [_fv_escape_path $path]
     _fv_release_native $escaped
@@ -524,9 +427,6 @@ proc fv_release {path} {
 }
 proc unforce {path} { fv_release $path }
 
-#================================================================
-# time/unit helpers
-#================================================================
 proc _aip_time_to_ns {t} {
     if {[regexp {^([0-9]+)\s*(ps|ns|us|ms|s)?$} $t _ n unit]} {
         if {$unit eq ""} { set unit "ns" }
@@ -541,9 +441,8 @@ proc _aip_time_to_ns {t} {
     return $t
 }
 
-# 统一辅助函数的推进；AIP模式下由控制层识别真实暂停并保存原 owner/期限。
-# 仅单独加载
-# 工具库时保留历史原生回退，不假定SV bridge或控制层已存在。
+# 辅助命令的统一推进：AIP 模式经控制层（识别真实暂停、保存原 owner/期限，不屏蔽暂停提示符）；
+# 单独加载本库时回退原生 run，不假定 SV bridge 或控制层存在。
 proc _aip_safe_run {duration} {
     if {[info commands _aip_advance] ne ""} {
         _aip_advance helper $duration
@@ -554,10 +453,8 @@ proc _aip_safe_run {duration} {
     }
 }
 
-#================================================================
-# run_to：有限轮询直到匹配，保留旧超时/返回值契约；pause% 使用调试推进，
-# 不释放原脚本。非正轮询会使预算不增长，故必须在第一次读取/推进前拒绝。
-#================================================================
+# 有限轮询直到匹配，超时返回 0（保持旧契约）；pause% 中走调试推进，不释放原脚本。
+# 非正 poll 会使已用时间不增长，故须在首次读取/推进前拒绝。
 proc run_to {path val args} {
     if {[info commands _aip_control_assert_helper_allowed] ne ""} { _aip_control_assert_helper_allowed run_to }
     set opts [_fv_parse_opts $args {timeout 10us poll 100ns}]
@@ -585,10 +482,8 @@ proc run_to {path val args} {
     return 0
 }
 
-#================================================================
-# wait_posedge：按有限 poll 步长等待边沿，超时返回已观察数量；pause% 中
-# 每步经调试入口，遇到新 watch/中断即报错，原脚本的暂停栈始终保留。
-#================================================================
+# 按 poll 步长采样计数上升沿，超时返回已观察数；pause% 中每步经调试入口，
+# 遇新 watch/中断即报错，原脚本的暂停栈保留。
 proc wait_posedge {clk args} {
     if {[info commands _aip_control_assert_helper_allowed] ne ""} { _aip_control_assert_helper_allowed wait_posedge }
     set opts [_fv_parse_opts $args {n 1 timeout 1us poll 1ns}]
@@ -618,14 +513,8 @@ proc wait_posedge {clk args} {
     return $seen
 }
 
-#================================================================
-# pulse — force val for duration then release + deposit default
-#
-#   pulse path val duration              ;# release 后 deposit 0
-#   pulse path val duration -default V   ;# 自定义 release 后值
-#================================================================
-# 先预检上下文及暂停态有限 duration，再 force/等待并恢复默认值。调试推进
-# 因 watch/Ctrl+C 失败时 finally 仍归还临时 force，避免留下半个脉冲。
+# force 前预检上下文与 duration；推进因 watch/Ctrl+C 失败时 finally 仍
+# 归还临时 force，避免留下半个脉冲。
 proc pulse {path val duration args} {
     if {[info commands _aip_control_assert_helper_allowed] ne ""} { _aip_control_assert_helper_allowed pulse $duration }
     set opts [_fv_parse_opts $args {default 0}]
@@ -640,11 +529,8 @@ proc pulse {path val duration args} {
     _fv_log 1 "pulse: $path = $val for $duration, then $default_val"
 }
 
-#================================================================
-# reset_dut — standard reset sequence
-#================================================================
-# 发出用户明确指定的 DUT 复位脉冲；上下文/时长在 force 前检查，结束或
-# 推进被中断时均维持反极性 force。仅操作 DUT 信号，不重置 AIP owner/队列。
+# DUT 复位脉冲：force 前检查上下文/时长，结束或推进被中断时都保持反极性 force；
+# 只动 DUT 信号，不重置 AIP owner/队列。
 proc reset_dut {rst active_val duration} {
     if {[info commands _aip_control_assert_helper_allowed] ne ""} { _aip_control_assert_helper_allowed reset_dut $duration }
     set deassert [expr {1 - $active_val}]
@@ -657,9 +543,6 @@ proc reset_dut {rst active_val duration} {
     _fv_log 1 "reset_dut: $rst pulsed to $active_val for $duration, then $deassert"
 }
 
-#================================================================
-# dump_fsdb_start / dump_fsdb_stop / dump_vcd_start
-#================================================================
 proc dump_fsdb_start {args} {
     set opts [_fv_parse_opts $args {file wave.fsdb level 0 scope ""}]
     set file [dict get $opts file]
@@ -667,7 +550,7 @@ proc dump_fsdb_start {args} {
     set scope [dict get $opts scope]
     set ok 0
     if {[catch {
-        # fsdbDump* 是 Verdi 注册进 UCLI 的原生命令, 直接调 (原 bug: 前缀 $ 被 Tcl 当变量).
+        # fsdbDump* 是 Verdi 注册进 UCLI 的原生命令，直接调用，不能加 $ 前缀（会被 Tcl 当变量）。
         fsdbDumpfile $file
         if {$scope ne ""} {
             fsdbDumpvars $lvl $scope
@@ -698,9 +581,6 @@ proc dump_vcd_start {{file wave.vcd}} {
     _fv_log 1 "dump_vcd_start: $file"
 }
 
-#================================================================
-# dump_mem — read memory range, write hex file
-#================================================================
 proc dump_mem {path args} {
     set opts [_fv_parse_opts $args {from 0 to -1 file mem.hex width 32}]
     set from [dict get $opts from]
@@ -723,9 +603,6 @@ proc dump_mem {path args} {
     _fv_log 1 "dump_mem: $path \[$from:$to\] → $file ($count words, width=$width)"
 }
 
-#================================================================
-# load_mem — read hex file, force/deposit memory range
-#================================================================
 proc load_mem {path args} {
     set opts [_fv_parse_opts $args {mode deposit from 0 file mem.hex}]
     set from [dict get $opts from]
@@ -755,9 +632,6 @@ proc load_mem {path args} {
     _fv_log 1 "load_mem: $file → $path \[$from:$end\] ($count words)"
 }
 
-#================================================================
-# bp_set — 条件断点 (wrap UCLI when)
-#================================================================
 set ::_bp_id 0
 set ::_bp_list {}
 
@@ -799,9 +673,6 @@ proc bp_list {} {
     }
 }
 
-#================================================================
-# safe_finish — close dumps then $finish via SV bridge if available
-#================================================================
 proc safe_finish {} {
     catch { dump_fsdb_stop }
     if {[info commands aip_send_cmd] ne ""} {
@@ -812,9 +683,6 @@ proc safe_finish {} {
     _fv_log 1 "safe_finish"
 }
 
-#================================================================
-# find_signal — search hierarchy for matching signals
-#================================================================
 proc find_signal {pattern args} {
     set opts [_fv_parse_opts $args {scope ""}]
     set scope [dict get $opts scope]
@@ -839,9 +707,6 @@ proc find_signal {pattern args} {
     return $matches
 }
 
-#================================================================
-# drivers_of / loads_of
-#================================================================
 proc drivers_of {path} {
     set escaped [_fv_escape_path $path]
     if {[catch {drivers $escaped} result]} {
@@ -860,34 +725,23 @@ proc loads_of {path} {
     return $result
 }
 
-#================================================================
-# time_now
-#================================================================
 proc time_now {args} {
     set t [_aip_get_sim_time]
     if {$t ne ""} { return $t }
     return "unknown"
 }
 
-#================================================================
-# batch — collect multiple fv calls, execute together
-#================================================================
 set ::_batch_mode 0
 set ::_batch_cmds {}
 
 proc batch {block} {
-    # UCLI force 本身无 batch 接口, 此处只作 syntactic grouping + error containment
+    # UCLI force 没有批量接口，这里只做语法分组与错误包装。
     if {[catch { uplevel 1 $block } err]} {
         error "batch: $err"
     }
     _fv_log 1 "batch: block executed"
 }
 
-#================================================================
-# ECC / Parity primitives
-#================================================================
-
-# XOR all bits of an N-bit value, return 0 or 1
 proc _xor_bits {val width} {
     set x 0
     for {set i 0} {$i < $width} {incr i} {
@@ -896,8 +750,7 @@ proc _xor_bits {val width} {
     return $x
 }
 
-# Parity 计算: data 按 grain 分组, 每组算 XOR (even) 或 XOR ^ 1 (odd)
-# Returns: num_groups bits stacked (LSB = group 0)
+# 按 grain 分组计算奇偶位，group 0 在 LSB。
 proc _parity_compute {data width grain polarity} {
     if {$grain eq "word"} { set grain $width }
     if {[expr {$width % $grain}] != 0} {
@@ -920,7 +773,7 @@ proc _parity_width {data_width grain} {
     return [expr {$data_width / $grain}]
 }
 
-# SECDED Hamming ecc width (industry-standard pairs)
+# Standard SECDED widths: Hamming bits plus one overall parity bit.
 proc _secded_ecc_width {data_width} {
     switch -- $data_width {
         8   { return 5 }
@@ -932,8 +785,7 @@ proc _secded_ecc_width {data_width} {
     }
 }
 
-# SECDED encode
-# Layout: ecc[0] = overall parity, ecc[r:1] = r Hamming bits (r = ecc_total - 1)
+# SECDED encode: ecc[0] = overall parity, ecc[r:1] = r Hamming bits (r = ecc_total - 1).
 proc _hamming_encode {data data_width} {
     set ecc_total [_secded_ecc_width $data_width]
     set r [expr {$ecc_total - 1}]
@@ -957,7 +809,6 @@ proc _hamming_encode {data data_width} {
     return [expr {($hamming << 1) | $overall}]
 }
 
-# SECDED decode → {corrected_data status}
 proc _hamming_decode {data ecc data_width} {
     set ecc_total [_secded_ecc_width $data_width]
     set r [expr {$ecc_total - 1}]
@@ -1034,9 +885,6 @@ proc _crc8 {data data_width} {
     return $crc
 }
 
-#================================================================
-# Mem ECC config
-#================================================================
 array set ::_mem_cfg {}
 
 proc mem_cfg {path args} {
@@ -1073,11 +921,6 @@ proc _mem_get_cfg {path} {
     return $::_mem_cfg($path)
 }
 
-#----------------------------------------------------------------
-# mem_cfg_list — 列出所有已配置 mem path + 配置摘要
-# mem_cfg_get <path>  — 返回某 path 完整 dict
-# mem_cfg_clear <path|all>  — 清除配置
-#----------------------------------------------------------------
 proc mem_cfg_list {} {
     set paths [lsort [array names ::_mem_cfg]]
     if {[llength $paths] == 0} {
@@ -1155,9 +998,6 @@ proc _mem_ecc_decode {cfg data ecc} {
     }
 }
 
-#================================================================
-# mem_write / mem_read / mem_check
-#================================================================
 proc mem_write {path addr data} {
     set cfg [_mem_get_cfg $path]
     set width [dict get $cfg width]
@@ -1236,9 +1076,6 @@ proc mem_check {path addr} {
     return $status
 }
 
-#================================================================
-# Block / pattern writes
-#================================================================
 proc mem_write_block {path addr data_list} {
     set i 0
     foreach d $data_list {
@@ -1288,9 +1125,6 @@ proc mem_write_random {path addr count args} {
     _fv_log 1 "mem_write_random: $path\[$addr..[expr $addr+$count-1]\] seed=$seed"
 }
 
-#================================================================
-# mem_inject_err / mem_scrub
-#================================================================
 proc mem_inject_err {path addr bit_pos} {
     set cfg [_mem_get_cfg $path]
     set width [dict get $cfg width]
@@ -1344,21 +1178,13 @@ proc mem_scrub {path addr_from addr_to args} {
     return [dict create ok $ok single $single double $double other $other]
 }
 
-#================================================================
-# utils_help — 内置帮助 (覆盖整个 aip_ucli_utils 全部命令)
-#   utils_help                   ;# 列出所有命令 (按类别)
-#   utils_help <name>            ;# 详细 + 示例
-#   utils_help -category force   ;# 按类别筛选
-#
-# fv_help 保留为别名, 向后兼容
-#================================================================
+# utils_help 的帮助表，须覆盖本库全部命令。
 array set ::_fv_help_db {}
 
 proc _fv_help_add {name category synopsis usage example} {
     set ::_fv_help_db($name) [list $category $synopsis $usage $example]
 }
 
-# ----- Force -----
 _fv_help_add fv force \
     "single signal force/deposit" \
     "fv <path> <val> \[-force\]" \
@@ -1383,7 +1209,6 @@ _fv_help_add gv_at         get   "get at base\[idx\] (避免 TCL 解析 [])" "gv
 _fv_help_add fv_at_bit     force "fv_bit wrapper" "fv_at_bit <base> <bit|hi:lo> <val>" "fv_at_bit tb.dut.cfg_reg 7 1"
 _fv_help_add fv_at_release force "release at base\[idx\]" "fv_at_release <base> <idx>" "fv_at_release tb.dut.mem 5"
 
-# ----- Get / Release -----
 _fv_help_add gv get \
     "get signal value with radix conversion" \
     "gv <path> \[-hex|-dec|-bin|-raw\]" \
@@ -1391,7 +1216,6 @@ _fv_help_add gv get \
 _fv_help_add fv_release get "release force on signal" "fv_release <path>" "fv_release tb.dut.cfg_reg"
 _fv_help_add unforce    get "alias of fv_release"     "unforce <path>"    "unforce tb.dut.cfg_reg"
 
-# ----- Flow -----
 _fv_help_add run_to flow \
     "advance sim until signal matches value (poll)" \
     "run_to <path> <val> \[-timeout T\] \[-poll T\]" \
@@ -1409,7 +1233,6 @@ _fv_help_add reset_dut flow \
     "reset_dut <rst_path> <active_val> <duration>" \
     "reset_dut tb.dut.rst_n 0 100ns"
 
-# ----- Dump -----
 _fv_help_add dump_fsdb_start dump \
     "start FSDB dump (fallback VCD if PLI missing)" \
     "dump_fsdb_start \[-file f\] \[-level N\] \[-scope path\]" \
@@ -1417,7 +1240,6 @@ _fv_help_add dump_fsdb_start dump \
 _fv_help_add dump_fsdb_stop  dump "stop FSDB/VCD dump" "dump_fsdb_stop" ""
 _fv_help_add dump_vcd_start  dump "start VCD dump"     "dump_vcd_start \[file\]" "dump_vcd_start wave.vcd"
 
-# ----- Memory I/O -----
 _fv_help_add dump_mem mem \
     "read memory range, write hex file" \
     "dump_mem <path> \[-from N\] \[-to N\] \[-file f\] \[-width N\]" \
@@ -1427,7 +1249,6 @@ _fv_help_add load_mem mem \
     "load_mem <path> \[-from N\] \[-file f\] \[-force\]" \
     "load_mem tb.dut.mem{i} -file in.hex -from 0"
 
-# ----- Debug -----
 _fv_help_add bp_set debug \
     "conditional breakpoint (wraps UCLI when)" \
     "bp_set <path> <val> { action }" \
@@ -1441,7 +1262,6 @@ _fv_help_add find_signal debug \
 _fv_help_add drivers_of debug "show drivers of signal" "drivers_of <path>" "drivers_of tb.dut.cfg_reg"
 _fv_help_add loads_of   debug "show loads of signal"   "loads_of <path>"   "loads_of tb.dut.cfg_reg"
 
-# ----- Util -----
 _fv_help_add safe_finish util "close dumps then end_test (or finish)" "safe_finish" ""
 _fv_help_add time_now    util "current sim time string" "time_now" ""
 _fv_help_add batch       util "execute block (syntactic grouping)" "batch { cmds... }" "batch { fv a 1 ; fv b 2 }"
@@ -1451,7 +1271,6 @@ _fv_help_add utils_silent util "关闭 VCS UCLI 命令回显 (ucli% prompt + cmd
 _fv_help_add utils_loud   util "恢复 UCLI 命令回显" "utils_loud" ""
 _fv_help_add fv_help     util "alias of utils_help (backward compat)" "fv_help \[name\] \[-category cat\]" "fv_help fv_fill"
 
-# ----- ECC mem -----
 _fv_help_add mem_cfg ecc \
     "configure mem path: width / ecc_mode / layout / on_err" \
     "mem_cfg <path> -width N -ecc_mode {none|parity|secded|crc8} \[-parity_grain {8|16|32|word}\] \[-parity_polarity {even|odd}\] \[-on_err {warn|silent|error}\] \[-layout {concat|split}\] \[-ecc_path X\]" \
@@ -1537,9 +1356,6 @@ proc utils_help {args} {
 # 向后兼容别名
 proc fv_help {args} { uplevel 1 [list utils_help {*}$args] }
 
-#================================================================
-# Startup banner
-#================================================================
 puts "================================================================"
 puts " AIP UCLI Utils loaded"
 puts " Force:   fv, fv_bit, fv_fill, fv_random, fv_zero, fv_ones, fv_incr"

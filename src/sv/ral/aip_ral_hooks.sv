@@ -1,7 +1,4 @@
-//===========================================================
-// RAL接入契约：TB拥有hook/classifier及其业务资源；本文件只声明接口。
-// 不自动创建、注册或调用，不添加对象级观察hook或adapter基类。
-//===========================================================
+// RAL 接入契约：TB 实现并拥有 hook/classifier 及其资源，本文件只声明接口（不自动创建、注册或调用）。
 `ifndef AIP_RAL_HOOKS_SV
 `define AIP_RAL_HOOKS_SV
 virtual class aip_ral_reset_hook;

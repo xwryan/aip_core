@@ -1,7 +1,5 @@
-// tests/sv：保栈暂停回归的最小信号夹具；与原 test_cmd_wait.sv 共同编译。
-// 真实命令、UVM sequence/driver、桥接生命周期均由原测试拥有，本模块只提供
-// 精确时刻的断点信号、ACK 顶层别名及调试目标，不替代任何生产推进实现。
-// manual 模式的忙时钟只制造可重复的 Ctrl+C 墙钟窗口，其他模式不启动它。
+// 保栈暂停回归的最小信号夹具，与 test_cmd_wait.sv 共同编译：只提供断点信号、ACK 顶层别名及调试目标。
+// manual 模式的忙时钟只用于制造可重复的 Ctrl+C 墙钟窗口。
 module aip_live_resume_fixture;
     timeunit 1ns;
     timeprecision 1ps;

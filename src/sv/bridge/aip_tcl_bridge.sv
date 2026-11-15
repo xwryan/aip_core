@@ -1,21 +1,6 @@
-//===========================================================
-// 所属层次：src/sv/bridge；把 Tcl/UCLI 的一次请求映射到公共命令调度器。
-// package 拥有握手寄存器，run_loop 拥有每次请求的 ID、局部结果及 watchdog；
-// wait=0 的后台进程由命令调度层持有，不由后续请求的 watchdog 监控或清理。
-// 依赖 core/aip_cmd.sv 与 aip_inject_bridge.sv；调用者在整个 run_loop 期间
-// 保持 UVM objection。独立注入接收器在首个暂停前启动，不共享普通 ACK，
-// 普通命令阻塞期间仍可接受排队请求，且不会自行 $stop 或杀在途业务。
-// ACK 只发布本次调用的输出，禁止从可能被后台/其他入口改写的全局结果取值。
-// aip_tcl_bridge - TCL/UCLI command bridge
-// Bridge state lives in aip_core_pkg; the class owns the run loop.
-// TCL uses fully qualified aip_core_pkg::__tcl_* paths, and SV reads the
-// package state on resume from $stop.
-// Synchronization: $stop(0)/run handshake.
-//
-// Usage: `aip_tcl_bridge_create(name)
-// Exit:  end_test [drain=1000] [idle=1us] [timeout=10us] [cmd=cleanup]
-// Depends: aip_cmd.sv
-//===========================================================
+// Tcl/UCLI 命令桥：把一次请求映射到公共命令调度器；握手寄存器在 aip_core_pkg（Tcl 经 __tcl_* 路径 force/get），调用者在 run_loop 期间保持 objection。
+// run_loop 拥有每次请求的 ID、局部结果与 watchdog，ACK 只发布本次调用的输出；wait=0 的后台进程归调度层，不受后续 watchdog 监控。
+// 独立注入接收器在首个暂停前启动，不共享普通 ACK，普通命令阻塞期间仍可排队。
 `ifndef AIP_TCL_BRIDGE_SV
 `define AIP_TCL_BRIDGE_SV
 
@@ -44,10 +29,9 @@ reg __tcl_bridge_idle = 0;
 // with multiple $stop sites.
 reg __tcl_cmd_trigger = 0;
 
-// cmd_id ack handshake: TCL assigns monotonic id per cmd, SV writes back after
-// processing. TCL's bounded retry loop polls __tcl_result_id == my_id to confirm
-// the $stop that returned _vcs_run actually corresponds to this cmd (not a
-// stray chip-TB $stop or a leftover stop from a prior interrupted cmd).
+// cmd_id ack: Tcl assigns a monotonic id per cmd and SV writes it back after processing, so Tcl can tell
+// whether the $stop that returned _vcs_run belongs to this cmd (not a stray chip-TB $stop or a leftover
+// stop from an interrupted cmd).
 reg [31:0] __tcl_cmd_id    = 0;
 reg [31:0] __tcl_result_id = 0;
 
@@ -56,50 +40,36 @@ reg [31:0] __tcl_result_id = 0;
 reg [31:0] __tcl_cmd_names_ascii [0:4095];
 reg [31:0] __tcl_cmd_names_len = 0;
 
-// ============================================================
-// aip_activity — 全局活动计数器
-// monitor/scoreboard/driver 调 tick() 表示有活动
-// end_test idle=N 检测计数器稳定后退出
-// ============================================================
+// 全局活动计数：monitor/scoreboard/driver 调 tick() 表示有进展，供 end_test idle 检测与命令停滞 watchdog 使用。
 class aip_activity;
     static int unsigned count = 0;
 
-    // 发布一次业务进展；全局计数只供既有空闲检测使用，不代表命令完成。
+    // 只表示业务进展，不代表命令完成。
     static function void tick();
         count = count + 1;
     endfunction
 
-    // 返回计数快照；不推进仿真时间或改变任何命令生命周期。
     static function int unsigned get_count();
         return count;
     endfunction
 endclass
 
-// ============================================================
-// aip_end_checker — 退出检查回调基类（虚类）
-// 用户实现 is_done()，end_test wait_done=1 时轮询
-// ============================================================
+// end_test 退出检查回调基类：用户实现 is_done()，end_test wait_done=1 时轮询。
 virtual class aip_end_checker;
-    // 用户实现完成判定；由end_test轮询，不能阻塞或消费业务数据。
+    // 由 end_test 轮询，不能阻塞或消费业务数据。
     pure virtual function bit is_done();
 
-    // 缺省无失败；派生检查器可在完成前报告不可恢复的业务失败。
+    // 派生类可在完成前报告不可恢复的业务失败。
     virtual function bit has_failed();
         return 0;
     endfunction
 
-    // 返回诊断文本，供end_test的失败或超时汇总使用。
     virtual function string status_detail();
         return "";
     endfunction
 endclass
 
-// ============================================================
-// aip_cmd_watchdog_hook — 命令停滞超时清理回调（虚类）
-// run_loop 的停滞检测 watchdog 判定某条命令死锁并强杀后，调 on_timeout()
-// 让用户补做子系统脏状态清理（如 seq.kill()、复位 mailbox flag）。
-// cmd_str 是被杀的命令原文，供用户按命令类型分派清理。
-// ============================================================
+// 命令停滞超时清理回调：watchdog 强杀死锁命令后调 on_timeout(cmd_str)，供用户按命令类型补做子系统清理（如 seq.kill()、复位 mailbox flag）。
 virtual class aip_cmd_watchdog_hook;
     // 当次命令进程取消后通知用户清理；不保证seq.kill已修复driver的协议状态。
     pure virtual function void on_timeout(string cmd_str);
@@ -107,31 +77,26 @@ endclass
 
 class aip_tcl_bridge;
 
-    // Exit control
     static bit __tcl_exit = 0;
 
     // Watchdog: auto-exit after N consecutive idle cycles (0=disabled)
     static int idle_limit = 0;
 
-    // End checker callbacks
     static aip_end_checker end_checker = null;
     static aip_end_checker named_end_checkers[string];
     static bit end_checker_wait_active = 0;
     static process end_checker_wait_owner = null;
     static process end_test_owner = null;
 
-    // 命令停滞看门狗: 某条命令连续 cmd_watchdog_stall_ns 无活动进展
-    // (aip_activity::count 不变) 判死锁, 强杀 exec, 让 run_loop 回到接命令态.
-    // 0 = 禁用. 默认 50us. 停滞检测 (非绝对超时): 正常长 seq 只要持续 tick 不被误杀.
+    // 命令停滞看门狗：某命令连续 cmd_watchdog_stall_ns 无 activity 进展即判死锁并强杀（0 = 禁用）；
+    // 检测的是停滞而非绝对超时，持续 tick 的长 seq 不会被误杀。
     static real cmd_watchdog_stall_ns = 50000.0;
 
-    // 停滞采样间隔 (每隔多久看一次 activity count). 越小越灵敏, 越大开销越低.
+    // 停滞采样间隔：越小越灵敏，越大开销越低。
     static real cmd_watchdog_poll_ns = 1000.0;
 
-    // 停滞超时后的脏状态清理回调 (可选).
     static aip_cmd_watchdog_hook watchdog_hook = null;
 
-    // 本类状态为静态；构造不启动线程、不取得外部资源。
     function new();
     endfunction
 
@@ -204,18 +169,14 @@ class aip_tcl_bridge;
         `aip_info(("[AIP_TCL_BRIDGE] Cmd watchdog stall timeout = %.0f ns", stall_ns));
     endfunction
 
-    // 注册停滞超时清理钩子.
     static function void set_watchdog_hook(aip_cmd_watchdog_hook h);
         watchdog_hook = h;
     endfunction
 
-    // 刷新仿真时间字符串供 TCL 兜底读取 (senv time 不可用时).
-    // run_loop 在 (a) 命令处理完暂停前 (b) free_run 推进每步 都调, 保证不陈旧.
+    // 供 Tcl 在 senv time 不可用时兜底读取；run_loop 在命令处理完暂停前与 free_run 每步推进时刷新。
     static function void update_sim_time();
         string time_s;
-        // timeunit 无关: $realtime 与 1ns 同 timeunit, 比值恒为 ns.
-        // 取代旧的 real'(1ns) 阈值猜单位 (只对 1ps/1ns/1us/1ms 正确,
-        // 10ps/100ps/10ns 等会标错单位导致 10x/100x 放大).
+        // $realtime/1ns 恒为 ns、与 timeunit 无关；按 real'(1ns) 阈值猜单位会把 10ps/100ps/10ns 标错。
         real t_ns = $realtime / 1ns;
         time_s = $sformatf("%.3f ns", t_ns);
         __tcl_sim_time_len = time_s.len();
@@ -223,12 +184,8 @@ class aip_tcl_bridge;
             __tcl_sim_time_ascii[j] = time_s[j];
     endfunction
 
-    // 每次触发独占ID和结果；同步命令等执行完，wait=0只等调度器启动确认。
-    // watchdog只取消当次执行进程，再清理被取消进程拥有的seq，不能全局杀seq。
-    // Main loop: event-driven trigger pulse from TCL.
-    // Initial $stop lets first _vcs_run return so user gets ucli prompt.
-    // Then @(posedge __tcl_cmd_trigger) blocks until TCL pulses trigger
-    // for each cmd. This is independent of any other $stop in chip TB.
+    // 初始 $stop 让首个 _vcs_run 返回 UCLI 提示符；之后每条命令等 Tcl 的 trigger 脉冲（与芯片 TB 的其他 $stop 无关）。
+    // 同步命令等执行完，wait=0 只等调度器启动确认；watchdog 只取消当次执行进程及其 seq，不能全局杀 seq。
     static task run_loop();
         int idle_count;
         __tcl_exit = 0;
@@ -237,8 +194,7 @@ class aip_tcl_bridge;
 
         `aip_info(("[AIP_TCL_BRIDGE] Started, waiting for commands..."));
 
-        // 把已注册命令名 (逗号分隔) 写进后门 reg, 供 TCL 启动 get 读 (零握手)
-        // 缓存, 未注册命令快速失败用. 命令 elaboration 期静态注册, 写一次即可.
+        // 命令名表在 elaboration 期静态注册，启动时写一次供 Tcl 后门读取（零握手），用于未注册命令快速失败。
         begin
             string cmd_names;
             cmd_names = aip_cmd::get_all_cmd_names();
@@ -296,12 +252,8 @@ class aip_tcl_bridge;
                 command_status = 0;
                 __wd_scope = new();
 
-                // Latch cmd_id at accept time so subsequent TCL force on
-                // __tcl_cmd_id (next cmd) does not contaminate this cmd's ack.
-                // Critical for Ctrl+C recovery: if TCL force a new id while
-                // this exec is mid-flight, our ack still reflects the
-                // originally-accepted id, so TCL retry loop knows this $stop
-                // is NOT its new cmd.
+                // Latch cmd_id at accept time: after Ctrl+C recovery Tcl may force a new id while this exec
+                // is in flight, and the ack must still name the originally accepted command.
                 local_cmd_id = __tcl_cmd_id;
 
                 // int[] → string (cmd_str also implicitly latches cmd_ascii/len)
@@ -330,8 +282,7 @@ class aip_tcl_bridge;
 
                 `aip_debug(("[AIP_TCL_BRIDGE] Received: %s", cmd_str));
 
-                // ---- 停滞检测 watchdog: 命令连续无活动进展判死锁, 强杀 exec ----
-                // 保证 run_loop 永远能回到接命令态, 后续命令不被一条卡死的命令连累.
+                // 停滞检测 watchdog：连续无活动进展判死锁并强杀 exec，保证 run_loop 总能回到接命令态。
                 __wd_killed = 0;
                 if (cmd_watchdog_stall_ns <= 0.0) begin
                     // watchdog 禁用时直接调度；业务自身的独立执行进程由core提供。
@@ -346,13 +297,12 @@ class aip_tcl_bridge;
                     __wd_last_act = aip_activity::count;
                     __wd_stall    = 0.0;
                     fork
-                        // 分支A: 真正执行命令
                         begin
                             __wd_exec_process = process::self();
                             aip_cmd::exec_result(cmd_str, SRC_TCL, command_status, result, null, __wd_scope);
                             __wd_done = 1;
                         end
-                        // 分支B: 停滞监控 (采样 activity count, 持续无进展才判死锁)
+                        // 停滞监控：采样 activity count，持续无进展才判死锁。
                         begin
                             __wd_monitor_process = process::self();
                             while (__wd_done == 0) begin
@@ -439,14 +389,11 @@ class aip_tcl_bridge;
 
                 `aip_debug(("[AIP_TCL_BRIDGE] Result: status=%0d, msg=%s", __tcl_result_status, result));
 
-                // 更新仿真时间字符串供 TCL 读取
                 update_sim_time();
 
                 __tcl_cmd_len = 0;
 
-                // ack: write back the LATCHED id (captured at wake-time), so
-                // TCL retry loop can distinguish "$stop from THIS cmd" from
-                // "$stop from prev cmd whose id was overwritten by TCL force".
+                // Ack with the id latched at wake-time so Tcl can tell this cmd's $stop from a previous cmd's.
                 __tcl_result_id = local_cmd_id;
 
                 $fflush();
@@ -460,17 +407,8 @@ class aip_tcl_bridge;
 
 endclass
 
-// ============================================================
-// Built-in: end_test — exit TCL bridge
-// Usage:
-//   end_test                          ;# 立即退出
-//   end_test drain=1000               ;# 固定 drain 1000ns
-//   end_test idle=1us                 ;# 等活动计数器稳定 1us
-//   end_test idle=500 timeout=10us    ;# idle 检测 + 超时保底
-//   end_test wait_done=1 timeout=5us  ;# 等回调 is_done() + 超时
-//   end_test idle=1us cmd=vio_release
-//   end_test idle=1us cmd=vio_stop cmd=vio_release
-// ============================================================
+// end_test：退出 Tcl bridge。用法 end_test [drain=ns] [idle=t] [timeout=t] [wait_done=1] [cmd=c ...]；
+// 依次执行固定 drain、检查器等待、活动空闲检测，最后按书写顺序同步执行清理命令。
 class \__aip_cmd_end_test extends aip_cmd;
     // 去掉命令列表值外层的一对 brace；内部 brace 仍保留给子命令参数。
     static function string unwrap_cleanup_value(string value);
@@ -785,14 +723,11 @@ class \__aip_cmd_end_test extends aip_cmd;
         end
     endtask
 
-    // 注册同步控制入口，不把结束仿真操作作为可后台执行的用户任务。
     function new(string name); super.new(name); endfunction
     static \__aip_cmd_end_test __inst = new("end_test");
 endclass
 
-// ============================================================
-// Watchdog 控制命令 (TCL 直接调用, 无需重编译)
-// ============================================================
+// Watchdog 控制命令（Tcl 直接调用，无需重编译）。
 
 // set_cmd_watchdog [ns=N]   改停滞超时阈值 (0=禁用); 无参则只读当前值
 class \__aip_cmd_set_cmd_watchdog extends aip_cmd;
@@ -811,7 +746,6 @@ class \__aip_cmd_set_cmd_watchdog extends aip_cmd;
         end
         this.status = 0;
     endtask
-    // 静态注册控制命令；不创建监控线程。
     function new(string name); super.new(name); endfunction
     static \__aip_cmd_set_cmd_watchdog __inst = new("set_cmd_watchdog");
 endclass
@@ -831,14 +765,12 @@ class \__aip_cmd_kill_seq extends aip_cmd;
         end
         this.status = 0;
     endtask
-    // 注册同步取消入口，结果给出实际取消数量。
     function new(string name); super.new(name); endfunction
     static \__aip_cmd_kill_seq __inst = new("kill_seq");
 endclass
 
 // watchdog_status   查看 watchdog 配置 + 活动 seq 数
 class \__aip_cmd_watchdog_status extends aip_cmd;
-    // 只读展示全局阈值与活动seq数量，不等待后台任务完成。
     task cmd_exec();
         this.result_out = $sformatf("stall_ns=%.0f poll_ns=%.0f active_seqs=%0d hook=%s",
             aip_tcl_bridge::cmd_watchdog_stall_ns,
@@ -847,7 +779,6 @@ class \__aip_cmd_watchdog_status extends aip_cmd;
             (aip_tcl_bridge::watchdog_hook != null) ? "set" : "none");
         this.status = 0;
     endtask
-    // 注册只读控制入口；对象随package生命周期保留。
     function new(string name); super.new(name); endfunction
     static \__aip_cmd_watchdog_status __inst = new("watchdog_status");
 endclass

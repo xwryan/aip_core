@@ -1,9 +1,5 @@
-// tests/sv：aip_wait_policy 单元测试（纯 SV/UVM，不需要 Tcl 或 DPI 库）。
-// 覆盖：倍率与饱和、poll_until_flag 成功/超时/次数上限、事件等待、调用方自行轮询的
-//   wait_start/deadline_reached/wait_poll_interval 用法、load_params 与 do_copy。
-// 预期的 WAIT_POLICY 超时 uvm_error 由 report catcher 计数并降级为 INFO，
-//   因此通过时 UVM_ERROR 汇总仍为 0；任何意外错误都会保留并导致失败。
-// 运行：simv +twp.wait.poll_ns=7 +twp.wait.timeout_ns=500 +twp.wait.multiplier=4 +twp.wait.max_polls=99
+// aip_wait_policy 单元测试（纯 SV/UVM）。预期的 WAIT_POLICY 超时 uvm_error 由 catcher 计数并降级为 INFO，
+// 故通过时 UVM_ERROR 仍为 0，意外错误照常失败。
 `include "aip_core_pkg.sv"
 
 module test_wait_policy;
@@ -11,7 +7,6 @@ module test_wait_policy;
     import aip_core_pkg::*;
     `include "uvm_macros.svh"
 
-    // 统计并降级预期的 WAIT_POLICY 错误；其余报告原样放行。
     class twp_catcher extends uvm_report_catcher;
         int unsigned caught;
         function new(string name = "twp_catcher");

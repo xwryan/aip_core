@@ -1,5 +1,4 @@
-# tests/tcl：独立 simv 进程恢复在途快照，重新 source 后不得重新启动原业务。
-# 本脚本只重新建立 Tcl proc，所有 SV 类对象/执行线程应由 VCS 快照恢复。
+# 独立 simv 进程恢复在途快照：只重新 source Tcl，SV 对象/执行线程由快照恢复，不得重启原业务。
 set ::env(AIP_CORE) [file normalize ../..]
 source [file join $::env(AIP_CORE) dist aip_init.tcl]
 set ::aip_ckpt_dir ./checkpoint_background_artifacts

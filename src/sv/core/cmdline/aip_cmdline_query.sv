@@ -3,8 +3,7 @@
 `AIP_CMDLINE_INTERNAL_INCLUDE_ERROR__USE_AIP_CMDLINE_SV
 `else
 
-// 参数存在性查询：判断 <path>.<name> 是否被命令行或运行期 override 显式给出。
-// 匹配参数本身、索引 name[i] 与子字段 name.x，并支持无路径的叶名回退；
+// 判断 <path>.<name>（含 name[i]、name.x 及无路径叶名回退）是否被命令行或运行期 override 显式给出。
 // 只读键、不求值、不消费随机数，可在决定是否重建容器前调用。
 class aip_cmdline_query;
     // check_unsigned=1：对每个命中的键检查获胜值（已含 override），出现负数即 hard fatal。

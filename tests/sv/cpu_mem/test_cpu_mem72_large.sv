@@ -3,10 +3,8 @@
 `include "aip_cpu_loader.sv"
 `include "fake_mem.sv"
 
-// Large contiguous packed40 image regression.  It fills the complete
-// 2048-row ROM, then covers ten RAM72 depths across all four banks and both
-// u00/u01 arrays.  The file is generated at runtime so no binary fixture is
-// needed in the repository.
+// Large contiguous packed40 image regression: fills the whole 2048-row ROM, then ten RAM72 depths
+// across all four banks and both u00/u01 arrays.  The image is generated at runtime.
 module tb_large;
     localparam longint unsigned RAM_BASE      = 64'h8000_0000;
     localparam int              ROM_BYTES     = 32'h8000;
@@ -26,9 +24,8 @@ module tb_large;
     int fail_count;
 
     function automatic bit [7:0] image_byte(input longint unsigned byte_addr);
-        // Fold several address bytes so that byte-order, bank/depth shifts,
-        // and larger address-boundary errors cannot hide behind a 256-byte
-        // repeating pattern.
+        // Fold several address bytes so byte-order, bank/depth shifts and address-boundary
+        // errors cannot hide behind a 256-byte repeating pattern.
         return byte_addr[7:0] ^ byte_addr[15:8] ^ byte_addr[23:16] ^
                byte_addr[31:24] ^ byte_addr[39:32] ^ 8'hA5;
     endfunction

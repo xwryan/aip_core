@@ -1,11 +1,9 @@
-# Task1在VCS内嵌Tcl或host Tcl解析已生成记录；不驱动DUT。
-# 逐byte重建与现有bridge/inject一致，不借助UTF8解码掩盖桥接错误。
+# 在 VCS 内嵌 Tcl 或 host Tcl 中解析已生成的 RAL 记录（不驱动 DUT）；逐 byte 重建与 bridge/inject 一致，不借 UTF8 解码掩盖桥接错误。
 set ral_records_path [file join [pwd] ral_records.txt]
 if {[info exists argv] && [llength $argv] == 1 && [file exists [lindex $argv 0]]} {
     set ral_records_path [lindex $argv 0]
 }
 set ral_checks 0
-# 断言失败阻止最终PASS标记。
 proc ral_demand {condition label} {
     if {!$condition} { error "RAL_FOUNDATION_TCL_ASSERT $label" }
     incr ::ral_checks

@@ -102,7 +102,6 @@ class aip_soload;
     endtask
 endclass
 
-// ---- Built-in commands ----
 class \__aip_cmd_so_load extends aip_cmd;
     task cmd_exec();
         string path; int st; string m;

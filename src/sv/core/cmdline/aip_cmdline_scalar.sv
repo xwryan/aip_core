@@ -1,54 +1,40 @@
-//===========================================================
-// 所属层次：src/sv/core/cmdline（内部 include 片段，不是独立 compilation unit）。
 // 基础解析：整数/字符串、枚举、real、旧版 compact 辅助及注册日志限流。
-// 依赖公共上下文与 aip_str/aip_log/uvm_pkg；日志限流在标量解析类之后定义。
-// 目标变量由用户持有；解析过程不推进仿真时间，override 与 plusarg 的非空表达式共用求值路径。
-// set_param 只保存原文，随机抽样发生在每次读取时；空 override 仍返回类型初值，不回退宏默认值。
-// 只允许 aip_cmdline.sv 在其 include 窗口加载；拒绝直接包含，避免创建第二份 $unit/package 类型。
-// 聚合入口持有唯一的 AIP_CMDLINE_SV 防重入 guard，本文件不声明新的 package。
-// 所有 CLI 查询均经过共享参数源；恢复后重取当前进程参数，保持既有解析/优先级规则。
-//===========================================================
+// 内部 include 片段：只允许 aip_cmdline.sv 在其 include 窗口加载，拒绝直接包含以免创建第二份 $unit/package 类型。
 `ifndef AIP_CMDLINE_INTERNAL_INCLUDE
 `AIP_CMDLINE_INTERNAL_INCLUDE_ERROR__USE_AIP_CMDLINE_SV
 `else
 
-//-------------------------------------------------------------------------
 class aip_cmdline #(type T = int);
 
-    static bit global_required = 0; // 全局必填开关，默认非必填
-    static string last_array_ctrl = ""; // 最近一次 resolve_array 的控制键摘要 (each=/unique/sort=), 供注册日志打印
+    static bit global_required = 0; // 全局必填开关：置 1 时缺失参数报错
+    static string last_array_ctrl = ""; // 最近一次 resolve_array 的控制键摘要，供注册日志打印
 
-    // 随机模式枚举
     typedef enum { RANGE, WEIGHT_EACH, WEIGHT_TOTAL, INCREMENT, DECREMENT, LIST, SINGLE, RAND } rand_mode_t;
 
     typedef enum { NOT_WRAPPER, VALID_WRAPPER, MALFORMED_WRAPPER } outer_list_wrapper_state_t;
 
-    // 随机描述结构体. 所有数值用 aip_svec_t (有符号 1026 bit) 保存,
-    // 最后一步才 T'() 转换 — 这样同一份代码在 T=string 特化下也能编译.
+    // 数值统一用 aip_svec_t（有符号 1026 bit）保存，最后才 T'() 转换，使 T=string 特化也能编译。
     typedef struct {
         rand_mode_t mode;
         aip_svec_t  min, max, step, start, weight;
-        bit         full;        // 权重组里的 "rand" (Task 4)
+        bit         full;        // 权重组里的 "rand"
         aip_svec_t  list_vals[];
     } rand_desc_t;
 
-    // 索引赋值结构
     typedef struct {
         int index;
         string value_str;
     } index_assign_t;
 
 
-    // ---------- 私有辅助函数 ----------
-    // 解析 override: 先全名 path.name, 再退 leaf name（对齐 plusargs 两级回退）— Bug E
-    // 返回 1=命中（空串也算命中，靠 has() 判定）; 命中时 val 为 override 值 — Bug A
+    // 先查全名 path.name 再退 leaf name（与 plusarg 两级回退一致）；空串也算命中。
     static function bit lookup_override(string name, string path, output string val);
         string full = (path != "") ? {path, ".", name} : name;
         if (aip_cmdline_override::has(full)) begin
             val = aip_cmdline_override::get_val(full);
             return 1;
         end
-        if (path != "" && aip_cmdline_override::has(name)) begin  // leaf 回退 — Bug E
+        if (path != "" && aip_cmdline_override::has(name)) begin
             val = aip_cmdline_override::get_val(name);
             return 1;
         end
@@ -56,20 +42,16 @@ class aip_cmdline #(type T = int);
         return 0;
     endfunction
 
-    // 按 override/完整 plusarg/leaf plusarg 顺序查询，不消费 RNG；缺失必填项建立
-    // 独立错误上下文，确保数组控制键查询失败也能显示实际缺失键，不沿用上一字段。
+    // 按 override > +path.name > +name 查询，不消费 RNG；缺失必填项单独建上下文，报出实际缺失的键而非上一字段。
     static function string get_cmdline_string(string name, string path = "");
         uvm_cmdline_processor clp = aip_cmdline_source::get();
         string vals[$];
         string full_name;
         string override_val;
 
-        // 1. 先查 override 表（优先级最高，TCL set_param 设置）
-        //    用 has() 判命中(空串也返回), full->leaf 回退 — Bug A + Bug E
         if (lookup_override(name, path, override_val))
             return override_val;
 
-        // 2. 再查 plusargs（原有逻辑）
         if (path != "") begin
             full_name = $sformatf("+%s.%s=", path, name);
             clp.get_arg_values(full_name, vals);
@@ -87,13 +69,12 @@ class aip_cmdline #(type T = int);
         return (vals.size() > 0) ? vals[vals.size()-1] : "";
     endfunction
 
-    // 所有整数/字符串公共解析失败均打印来源并 hard fatal；VCS 需 -exitstatus 将失败传给 shell。
+    // 解析失败即 hard fatal；VCS 需 -exitstatus 才会把失败传给 shell。
     protected static function void error(string msg);
         aip_cmdline_diagnostic::report("AIP_CORE[cmdline] parser Error", msg, `__FILE__, `__LINE__);
     endfunction
 
-    // 判断 T 是否为整数族类型。VCS 的 $typename 会把 packed typedef 展开
-    // 成其底层类型，因此也要识别 logic/reg/integer，而不只识别 bit。
+    // VCS 的 $typename 会把 packed typedef 展开成底层类型，故也要识别 logic/reg/integer，不只 bit。
     protected static function bit is_integer_type();
         string tn = $typename(T);
         return (tn == "int" || tn == "byte" || tn == "shortint" || tn == "longint" ||
@@ -105,13 +86,12 @@ class aip_cmdline #(type T = int);
                 aip_str::str_find(tn, "reg") != -1);
     endfunction
 
-    // T 的位宽. 用变量而不是类型名取 $bits, 让 T=string 特化也能编译 (返回 0).
+    // 对变量而非类型名取 $bits，使 T=string 特化也能编译（返回 0）。
     protected static function int t_bits();
         T tmp;
         return $bits(tmp);
     endfunction
 
-    // nbits 位均匀随机, 非负
     protected static function aip_svec_t urand_svec(int nbits);
         aip_vec_t v = '0;
         for (int i = 0; i < nbits; i += 32) v = (v << 32) | $urandom();
@@ -119,13 +99,12 @@ class aip_cmdline #(type T = int);
         return aip_svec_t'({2'b00, v});
     endfunction
 
-    // [lo, hi] 闭区间均匀随机 (任意宽度; 偏差 2^-N 忽略)
+    // [lo, hi] 闭区间均匀随机，任意宽度；取模偏差约 2^-N，忽略。
     protected static function aip_svec_t rand_in_range(aip_svec_t lo, aip_svec_t hi);
         aip_svec_t span = hi - lo + 1;
         return lo + (urand_svec(AIP_VEC_MAX_BITS) % span);
     endfunction
 
-    // 解析单个整数字面量为有符号宽值, 并按 T 的位宽做 fail-closed 检查
     protected static function aip_svec_t parse_single_num(string s);
         aip_vec_t  v;
         aip_svec_t r;
@@ -142,7 +121,6 @@ class aip_cmdline #(type T = int);
         return neg ? -r : r;
     endfunction
 
-    // 解析单值（根据类型）
     protected static function T parse_single_value(string s);
         if (is_integer_type()) begin
             return T'(parse_single_num(s));
@@ -154,12 +132,9 @@ class aip_cmdline #(type T = int);
         end
     endfunction
 
-    // 固定 override 的轻量分流：只排除表达式标记，不代替正式字面量校验。
-    // 数字仅放行无空白的字面量候选字符；含空白时由公共路径规范化，
-    // 避免直接整数转换不去空白而造成两种来源语义不同。
-    // rand、范围、权重、列表、步长等仍交给原解析器，错误也由它带来源报告。
-    // 字符串只需排除智能分割涉及的逗号/括号，冒号和方括号本来就是普通文本。
-    // 无分配、无 RNG、无缓存；real 入口复用该方法以避免维护第二套判别规则。
+    // 固定 override 的快路径分流：只排除表达式标记，不代替正式字面量校验。
+    // 数字含空白时交公共路径规范化，以免与 plusarg 语义不同；字符串只排除分割用的逗号/括号。
+    // real 入口复用本方法，避免维护第二套判别规则。
     static function bit is_literal_candidate(string	s, bit	string_value = 0);
         for (int	i = 0; i < s.len(); i++) begin
             if (string_value) begin
@@ -174,7 +149,6 @@ class aip_cmdline #(type T = int);
         return s.len() != 0;
     endfunction
 
-    // 解析范围 [min:max]
     protected static function void parse_range(string s, output aip_svec_t min, output aip_svec_t max);
         int pos;
         string min_str,max_str;
@@ -199,7 +173,6 @@ class aip_cmdline #(type T = int);
         if (min > max) error($sformatf("Range min > max: %s", s));
     endfunction
 
-    // 解析整数列表（逗号分隔）
     protected static function void parse_int_list(string s, output aip_svec_t list[]);
         string parts[] = aip_str::split(aip_str::remove_all_spaces(s), ",");
         list = new[parts.size()];
@@ -210,10 +183,7 @@ class aip_cmdline #(type T = int);
         end
     endfunction
 
-    // ---------- 权重解析相关 ----------
-    // 将单个 := / :/ 权重项转成描述符；item_index 是原组中的零基序号，
-    // 用于定位非法权重。零权重只禁用抽样，不跳过左侧语法/位宽检查；
-    // 负权重立即报错，rand 仅允许 :/，避免无限候选集的逐值权重语义。
+    // 零权重只禁用抽样，不跳过左侧语法/位宽检查；rand 只允许 :/，避免无限候选集的逐值权重。
     protected static function rand_desc_t parse_weight_item(string s, int item_index = 0);
         rand_desc_t desc;
         int pos_eq,pos_sl,weight_pos,weight_len;
@@ -241,7 +211,6 @@ class aip_cmdline #(type T = int);
         if (desc.weight < 0)
             error($sformatf("Weight must be >= 0 in item[%0d] '%s'", item_index, s));
 
-        // 解析左侧（可能是范围、单个值，或 rand）
         desc.full = 0;
         if (left == "rand") begin
             if (desc.mode == WEIGHT_EACH) error("rand:=w not allowed; use rand:/w");
@@ -257,8 +226,7 @@ class aip_cmdline #(type T = int);
         return desc;
     endfunction
 
-    // 解析逗号分隔的完整权重组，输出描述数组；保留原项序号用于诊断。
-    // 所有项（包括权重为零的项）都必须完成解析，空项属于语法错误。
+    // 所有项（含零权重项）都须完整解析，空项属于语法错误。
     protected static function void parse_weight_items(string s, output rand_desc_t desc_list[]);
         string parts[] = aip_str::split(aip_str::remove_all_spaces(s), ",");
         desc_list = new[parts.size()];
@@ -271,7 +239,6 @@ class aip_cmdline #(type T = int);
 
     // 解析带括号的权重组（如 "{0:=40, [1:3]:=60}" 或 "([1:5]:/10)"）
     protected static function void parse_weight_group(string s, output rand_desc_t desc_list[]);
-        // 去除外层括号
         if ((s[0] == "{" && s[s.len()-1] == "}") || (s[0] == "(" && s[s.len()-1] == ")")) begin
             string inner = s.substr(1, s.len()-2);
             parse_weight_items(inner, desc_list);
@@ -280,9 +247,8 @@ class aip_cmdline #(type T = int);
         end
     endfunction
 
-    // 按描述数组抽取一个 T 值：:= 为每个离散值分配权重，:/ 为整项分配权重。
-    // 零权重项不参与累计或抽样，先检查全零和有符号累计溢出，再消费 RNG；
-    // 正权重组沿用原抽样调用顺序，以保持原有 seed 的可复现性。
+    // := 给每个离散值分配权重，:/ 给整项分配；全零与累计溢出在消费 RNG 前检查。
+    // 抽样调用顺序保持不变，相同 seed 结果可复现。
     protected static function T get_weighted_group_value(rand_desc_t desc_list[]);
         aip_svec_t r, accum, total_weight;
         aip_svec_t block_weight, candidate_count;
@@ -330,7 +296,7 @@ class aip_cmdline #(type T = int);
         return T'(0);
     endfunction
 
-    // 解析 inc/dec 的起点、终点和可选正步长；多余字段同样属于语法错误。
+    // 格式 inc|dec:start:end[:step]。
     protected static function void parse_inc_dec(string s, bit is_inc, output rand_desc_t desc);
         string cleaned = aip_str::remove_all_spaces(s);
         string remain = cleaned.substr(4, cleaned.len()-1);
@@ -386,7 +352,7 @@ class aip_cmdline #(type T = int);
     protected static function aip_svec_t each_candidate_count(string s);
         rand_desc_t d;
         string c = aip_str::remove_all_spaces(s);
-        if (!is_integer_type()) return -1;  // string .each 列表由第 8 步重抽循环处理
+        if (!is_integer_type()) return -1;  // string .each 列表交给 unique 重抽循环处理
         if (c == "" || c == "rand") return -1;
         if (c[0] == "{" || c[0] == "(" ||
             aip_str::str_find(c, ":=") != -1 || aip_str::str_find(c, ":/") != -1) return -1;
@@ -401,7 +367,6 @@ class aip_cmdline #(type T = int);
         endcase
     endfunction
 
-    // 解析随机描述（非权重组）
     protected static function rand_desc_t parse_rand_desc(string s);
         rand_desc_t desc;
         s = strip_outer_list_wrapper(s);
@@ -469,8 +434,7 @@ class aip_cmdline #(type T = int);
         return T'(val);
     endfunction
 
-    // Classify a complete outer [] containing a comma at the outer list level.
-    // [1:3] is therefore not a wrapper, while [1,[2:3],4] is a valid wrapper.
+    // An outer [] is a list wrapper only with a top-level comma: [1:3] is not, [1,[2:3],4] is.
     protected static function outer_list_wrapper_state_t classify_outer_list_wrapper(string s);
         string cleaned = aip_str::remove_all_spaces(s);
         int bracket_depth = 0;
@@ -557,13 +521,13 @@ class aip_cmdline #(type T = int);
         return cleaned;
     endfunction
 
-    // ---------- 智能分割数组元素（识别括号嵌套）----------
+    // 按顶层逗号分割，{} 与 () 内的逗号不拆。
     static function void split_array_elements(string s, ref string elems[]);
         int len = s.len();
         int brace_depth = 0;
         int paren_depth = 0;
         string current = "";
-        elems = new[0];  // 初始化为空
+        elems = new[0];
         for (int i = 0; i < len; i++) begin
             byte ch = s[i];
             if (ch == "{") brace_depth++;
@@ -571,7 +535,6 @@ class aip_cmdline #(type T = int);
             else if (ch == "(") paren_depth++;
             else if (ch == ")") paren_depth--;
             else if (ch == "," && brace_depth == 0 && paren_depth == 0) begin
-                // 顶层逗号，结束当前元素
                 elems = new[elems.size()+1](elems);
                 elems[elems.size()-1] = current;
                 current = "";
@@ -579,17 +542,14 @@ class aip_cmdline #(type T = int);
             end
             current = {current, ch};
         end
-        // 添加最后一个元素
         if (current != "") begin
             elems = new[elems.size()+1](elems);
             elems[elems.size()-1] = current;
         end
-        // 检查括号是否匹配
         if (brace_depth != 0 || paren_depth != 0)
             error($sformatf("Mismatched braces/parentheses in array string: %s", s));
     endfunction
 
-    // ---------- 根据类型安全分割整体赋值字符串（使用智能分割）----------
     protected static function void split_overall_string(string s, ref string parts[]);
         if (is_integer_type()) begin
             string cleaned = strip_outer_list_wrapper(s);
@@ -601,7 +561,6 @@ class aip_cmdline #(type T = int);
         end
     endfunction
 
-    // 公共表达式入口：上下文随此次 function 进入/退出，直接调用也能打印原始表达式。
     static function T parse_value(string s);
         T result;
         aip_cmdline_diagnostic::push_expression(s);
@@ -610,16 +569,13 @@ class aip_cmdline #(type T = int);
         return result;
     endfunction
 
-    // 单个值的实际解析；调用者负责诊断栈，保留原抽样顺序和各分支提前返回。
     protected static function T parse_value_impl(string s);
         if (is_integer_type()) begin
-            // 检查是否为权重组（以 { 或 ( 开头，且匹配结束）
             if ((s[0] == "{" && s[s.len()-1] == "}") || (s[0] == "(" && s[s.len()-1] == ")")) begin
                 rand_desc_t group[];
                 parse_weight_group(s, group);
                 return get_weighted_group_value(group);
             end else if (aip_str::str_find(s, ":=") != -1 || aip_str::str_find(s, ":/") != -1) begin
-                // 单个权重项（无括号）视为组
                 rand_desc_t items[];
                 parse_weight_items(s, items);
                 if (items.size() != 1)
@@ -644,13 +600,11 @@ class aip_cmdline #(type T = int);
         end
     endfunction
 
-    // ---------- 获取所有命令行参数 ----------
     protected static function void get_all_cmdline_args(ref string args[$]);
         uvm_cmdline_processor clp = aip_cmdline_source::get();
         clp.get_args(args);
     endfunction
 
-    // ---------- 收集指定数组的所有索引赋值 ----------
     protected static function void collect_indexed_assignments(
         string name, string path,
         ref int index_vals[int],
@@ -672,7 +626,6 @@ class aip_cmdline #(type T = int);
             arg = arg.substr(1, arg.len()-1);
             if (arg.len() < prefix.len()) continue;
             if (arg.substr(0, prefix.len()-1) != prefix) continue;
-            // 必须是 [index]= 格式
             pos = prefix.len();
             if (pos >= arg.len() || arg[pos] != "[") continue;
             end_bracket = aip_str::str_find(arg, "]", pos+1);
@@ -682,13 +635,12 @@ class aip_cmdline #(type T = int);
             if (idx == -1 && width == 0) continue;  // 非法索引
             if (end_bracket+1 >= arg.len() || arg[end_bracket+1] != "=") continue;
             val_str = arg.substr(end_bracket+2, arg.len()-1);
-            // 后定义覆盖
+            // 同一索引以后出现的 plusarg 为准
             index_vals[idx] = idx;
             value_strs[idx] = val_str;
         end
     endfunction
 
-    // ---------- 扫描 override 表的索引赋值 prefix[idx]（Bug B）----------
     // override key 形如 "path.name[3]" 或 "name[3]"（无 "=" 后缀）
     protected static function void collect_indexed_overrides(
         string name, string path,
@@ -722,7 +674,7 @@ class aip_cmdline #(type T = int);
         end
     endfunction
 
-    // 公共单值入口：附加可选的调用位置，兼容原四参数 API；包装层保证所有正常返回都恢复上下文。
+    // 尾部来源参数可选以兼容原四参数 API，用户宏自动传入 __FILE__/__LINE__。
     static function void get_single_value(string name, string path, T default_val, ref T val,
                                            input string source_file = "", input int source_line = 0);
         aip_cmdline_diagnostic::push(aip_cmdline_diagnostic::full_name(name, path), source_file, source_line);
@@ -730,11 +682,7 @@ class aip_cmdline #(type T = int);
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 按原优先级选择参数来源，再统一执行范围/列表/权重/步长候选解析。
-    // 非空随机 override 与 plusarg 使用相同抽样路径，字符串列表也每次重新选择；
-    // 固定 override 保留原字面量快路径和不消费 RNG 的行为，不创建候选数组。
-    // 空 override 保留类型默认初始化语义，缺失/空 plusarg 仍使用调用方默认值。
-    // 表达式错误由现有解析器带参数来源终止；本函数不缓存结果或改变 override 原文。
+    // 非空随机 override 与 plusarg 走同一抽样路径（每次读取重新抽）；固定 override 走字面量快路径，不消费 RNG。
     protected static function void get_single_value_impl(string name, string path, T default_val, ref T val);
         string	parts[];
         string	s;
@@ -742,12 +690,12 @@ class aip_cmdline #(type T = int);
 
         is_ov = lookup_override(name, path, s);   // 命中则 s=override 值(可能空串)
         if (!is_ov)
-            s = get_cmdline_string(name, path);   // 未命中 override -> plusargs
+            s = get_cmdline_string(name, path);
 
         aip_cmdline_diagnostic::select_value(aip_cmdline_diagnostic::full_name(name, path), s);
 
         if (is_ov && s == "") begin
-            T	zero; // 保持原类型默认初始化语义，包括 string 空串与四态类型。
+            T	zero; // 空 override 取类型初值（含 string 空串与四态类型），不回退宏默认值
             val = zero;
             return;
         end
@@ -772,7 +720,7 @@ class aip_cmdline #(type T = int);
 
     endfunction
 
-    // 动/静态数组公共入口：建立跨元素类型共享的诊断来源；附加参数不影响原 API。
+    // fixed_size=-1：动态数组，长度由 .size/整体列表/最大索引决定；>=0：静态数组，.size 与超长列表报错。
     static function void resolve_array(
         string name, string path, T default_val, int fixed_size, ref T arr[],
         input string source_file = "", input int source_line = 0
@@ -782,9 +730,6 @@ class aip_cmdline #(type T = int);
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 动/静态数组内部解析；调用者保证入口上下文存在，当前键在每个表达式求值前切换。
-    // fixed_size = -1: 动态数组 (size 由 .size / 整体列表 / 索引决定)
-    // fixed_size >= 0: 静态数组, 长度固定, .size 与超长列表报错
     protected static function void resolve_array_impl(
         string name, string path,
         T default_val,
@@ -806,7 +751,6 @@ class aip_cmdline #(type T = int);
         string no_path_strs[int];
         int max_idx = -1;
 
-        // 1. .size
         size_str = get_cmdline_string({name , ".size"}, path);
         aip_cmdline_diagnostic::select_value(aip_cmdline_diagnostic::full_name({name, ".size"}, path), size_str);
         if (fixed_size >= 0) begin
@@ -834,7 +778,6 @@ class aip_cmdline #(type T = int);
         if (do_unique)       last_array_ctrl = {last_array_ctrl, "unique "};
         if (sort_str != "")  last_array_ctrl = {last_array_ctrl, "sort=", sort_str, " "};
 
-        // 2. 整体赋值
         overall_str = get_cmdline_string(name, path);
         aip_cmdline_diagnostic::select_value(aip_cmdline_diagnostic::full_name(name, path), overall_str);
         if (overall_str != "" && is_integer_type() && is_generator(overall_str)) begin
@@ -860,7 +803,6 @@ class aip_cmdline #(type T = int);
             error($sformatf("%s overall list has %0d elements, .size is %0d",
                             name, overall_vals.size(), size));
 
-        // 3. 索引赋值 (原 get_dynamic_array 第 3 步, 原样保留)
         begin
             int    ov_p_v[int]; string ov_p_s[int];
             int    ov_l_v[int]; string ov_l_s[int];
@@ -881,7 +823,6 @@ class aip_cmdline #(type T = int);
             if (i > max_idx) max_idx = i;
         end
 
-        // 4. 动态数组长度
         if (size == -1) begin
             if (overall_vals.size() > 0) begin
                 size = overall_vals.size();
@@ -896,7 +837,6 @@ class aip_cmdline #(type T = int);
             end
         end
 
-        // 5. 分配; 每元素独立按 .each 抽, 无 .each 填 default
         arr = new[size];
         fixed = new[size];
         aip_cmdline_diagnostic::select_value(aip_cmdline_diagnostic::full_name({name, ".each"}, path), each_str);
@@ -905,13 +845,12 @@ class aip_cmdline #(type T = int);
             fixed[i] = (each_str == "");
         end
 
-        // 6. 整体赋值
         for (int i = 0; i < overall_vals.size(); i++) begin
             arr[i] = overall_vals[i];
             fixed[i] = 1;
         end
 
-        // 7. 索引覆盖 (越界索引忽略, 与旧行为一致)
+        // 越界索引静默忽略（保持既有行为）。
         foreach (index_vals[i]) begin
             if (i < size) begin
                 aip_cmdline_diagnostic::select_value($sformatf("%s[%0d]", aip_cmdline_diagnostic::full_name(name, path), i), index_strs[i]);
@@ -920,7 +859,7 @@ class aip_cmdline #(type T = int);
             end
         end
 
-        // 8. .unique: 固定值互不重复; .each 生成的元素与已有值冲突则重抽
+        // .unique：固定值（默认/整体/索引赋值）互不重复；.each 生成的元素与已有值冲突则重抽，上限 100×size 次。
         if (do_unique) begin
             int to_fill = 0;
             int draws = 0;
@@ -952,12 +891,11 @@ class aip_cmdline #(type T = int);
             end
         end
 
-        // 9. .sort: 对最终数组排序 (索引覆盖值一起排); 内建方法, seq: 上限 1000000 元素也不卡
+        // 索引覆盖值一起排序；用内建方法，1000000 元素的 seq 也不卡。
         if (sort_str == "asc")       arr.sort();
         else if (sort_str == "desc") arr.rsort();
     endfunction
 
-    // 动态数组转接到统一入口，传递可选用户位置；生命周期由 resolve_array 包装层管理。
     static function void get_dynamic_array(
         string name, string path,
         T default_val,
@@ -969,13 +907,8 @@ class aip_cmdline #(type T = int);
 
 endclass
 
-//-------------------------------------------------------------------------
-// aip_cmdline_enum - 枚举命令行解析辅助类；统一校验全部候选后再抽样，
-// 避免非法候选因本次随机未选中而隐藏。直接 API 调用也有独立表达式上下文。
-//-------------------------------------------------------------------------
+// 枚举解析：先校验全部候选再抽样，避免非法候选因本次未被抽中而隐藏。
 class aip_cmdline_enum;
-    // 输入名称/位值映射及逗号候选，返回随机候选的无损位值；空项、未知名称或
-    // 映射长度不一致均交给公共 fatal，正常返回前恢复上层宏或 schema 的来源。
     static function logic [1023:0] resolve_bits(string s, string names[$], logic [1023:0] values[$]);
         string cleaned, candidate;
         logic [1023:0] candidates[$], result;
@@ -1018,8 +951,7 @@ class aip_cmdline_enum;
         return result;
     endfunction
 
-    // 兼容 int 枚举接口；位值统一交由 resolve_bits 解析，保留有符号 int 的低 32 位。
-    // 直接名称和逗号随机列表均忽略大小写，非法候选由公共诊断立即终止仿真。
+    // 兼容 int 枚举接口：经 resolve_bits 解析后取低 32 位。
     static function int resolve(string s, string names[$], int values[$]);
         logic [1023:0] wide_values[$];
         foreach (values[i]) wide_values.push_back(values[i]);
@@ -1028,14 +960,11 @@ class aip_cmdline_enum;
 
 endclass
 
-//-------------------------------------------------------------------------
-// aip_cmdline_real - real 类型命令行解析类（独立于参数化类，兼容 VCS）
-//-------------------------------------------------------------------------
+// real 解析独立于参数化 aip_cmdline#(T)，以兼容 VCS。
 class aip_cmdline_real;
 
-    // 将十进制原文与 binary64 最大有限值比较；VCS sscanf 对溢出返回 DBL_MAX，
-    // 仅检查转换结果无法发现错误。保留既有 schema 算法，普通/权重/预检共同复用。
-    // 此函数只判数值上界，语法完整性仍由调用方检查；允许零及下溢到零。
+    // VCS sscanf 对溢出返回 DBL_MAX 而非 Inf，只查转换结果发现不了，故按十进制原文与 binary64 最大有限值比较。
+    // 只判上界（允许零及下溢到零），语法完整性由调用方检查。
     static function bit decimal_overflow(string token);
         string s, mant, exp_text, digits, max_dec;
         int ep, dot, digits_before, lead, exp_sign, exp_value, sci, i, d;
@@ -1085,14 +1014,10 @@ class aip_cmdline_real;
         sci = exp_value + digits_before - lead - 1;
         if (sci > 308) return 1;
         if (sci < 308) return 0;
-        // The exponent calculation accounts for leading zeroes, but the
-        // equal-exponent magnitude comparison must compare normalized digits.
-        // Otherwise a token such as 0.18e309 compares its leading zero against
-        // DBL_MAX's leading one and is incorrectly accepted.
+        // The equal-exponent comparison needs normalized digits; otherwise 0.18e309 would
+        // compare its leading zero against DBL_MAX's leading one and be accepted.
         digits = digits.substr(lead, digits.len()-1);
-        // Exact decimal expansion of IEEE-754 binary64's largest finite
-        // value.  Comparing at the same decimal exponent catches values
-        // that VCS saturates to DBL_MAX instead of returning Inf.
+        // Exact decimal expansion of IEEE-754 binary64's largest finite value (DBL_MAX).
         max_dec = "179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368";
         for (i = 0; i < max_dec.len() || i < digits.len(); i++) begin
             ch = (i < digits.len()) ? digits[i] : "0";
@@ -1104,21 +1029,18 @@ class aip_cmdline_real;
         return 0;
     endfunction
 
-    // IEEE-754 指数字段全 1 表示 Inf/NaN；位模式检查不依赖工具的浮点比较行为。
-    // 文本溢出可能已被工具饱和为有限 DBL_MAX，因此还需配合 decimal_overflow 使用。
+    // 查指数字段全 1（Inf/NaN），不依赖工具浮点比较；被饱和成 DBL_MAX 的溢出需配合 decimal_overflow 检查。
     static function bit is_finite(real value);
         bit [63:0] encoding;
         encoding = $realtobits(value);
         return encoding[62:52] != 11'h7ff;
     endfunction
 
-    // real 解析错误统一补用户位置与完整表达式，并以 hard fatal 终止。
     protected static function void error(string msg);
         aip_cmdline_diagnostic::report("AIP_CORE[cmdline_real] parser Error", msg, `__FILE__, `__LINE__);
     endfunction
 
-    // 参数专用 real 转换：必须完整消费有限数字，非法输入不能沿用通用工具的零值回退。
-    // 保留现有去空格语义；来源由公共入口持有，不改变 aip_str 的其他调用者。
+    // 须完整消费有限数字，不沿用 aip_str 通用转换对非法输入的零值回退（单独实现以免影响其他调用者）。
     protected static function real parse_real_literal(string token);
         real value;
         string trailing;
@@ -1129,7 +1051,6 @@ class aip_cmdline_real;
         return value;
     endfunction
 
-    // 解析 real 范围 [min:max] 或 min:max；两端必须为完整有限数字且 min <= max。
     protected static function void parse_real_range(string s, output real rmin, output real rmax);
         string inner = aip_str::remove_all_spaces(s);
         int pos;
@@ -1152,7 +1073,7 @@ class aip_cmdline_real;
         if (rmin > rmax) error($sformatf("Real range min > max: %s", s));
     endfunction
 
-    // 解析 real inc/dec（如 inc:0.1:1.0:0.1）；拒绝多余字段、非法数字和不可抽样的步数。
+    // 格式 inc|dec:start:end[:step]，如 inc:0.1:1.0:0.1。
     protected static function real parse_real_inc_dec(string s, bit is_inc);
         string cleaned = aip_str::remove_all_spaces(s);
         string remain = cleaned.substr(4, cleaned.len()-1);
@@ -1184,7 +1105,6 @@ class aip_cmdline_real;
     endfunction
 
     // 权重组内的实数字面量必须完整消费，防止被禁用项中的拼写错误静默变成 0。
-    // 输入 token 及所属项用于诊断，返回有限 real；格式错误/非有限值立即报错。
     protected static function real parse_real_weight_literal(string token, string item, int item_index);
         real value;
         string trailing;
@@ -1195,9 +1115,8 @@ class aip_cmdline_real;
         return value;
     endfunction
 
-    // 解析并抽样 real 权重组；real 范围保持现有连续均匀抽样语义，权重必须
-    // 为 0..INT_MAX 的整数。零权重项仍检查语法，累计溢出和全零组在 RNG 前报错；
-    // 正权重输入不增加随机调用，保持旧版相同 seed 下的抽样顺序。
+    // 权重须为 0..INT_MAX 整数，范围项连续均匀抽样；零权重项仍查语法，溢出与全零组在 RNG 前报错。
+    // 不增加随机调用次数，保持相同 seed 下的既有抽样顺序。
     protected static function real parse_real_weight_group(string s);
         string inner;
         string parts[];
@@ -1274,7 +1193,6 @@ class aip_cmdline_real;
         return 0.0;
     endfunction
 
-    // real 表达式公共入口：保留原文及调用来源，在实际求值后恢复上层诊断上下文。
     static function real parse_value(string s);
         real result;
         aip_cmdline_diagnostic::push_expression(s);
@@ -1283,49 +1201,41 @@ class aip_cmdline_real;
         return result;
     endfunction
 
-    // real 内部求值：由公共入口持有诊断上下文，维持已有随机抽样顺序。
     protected static function real parse_value_impl(string s);
         s = aip_str::remove_all_spaces(s);
-        // 权重组 {...} 或 (...)
         if ((s[0] == "{" && s[s.len()-1] == "}") || (s[0] == "(" && s[s.len()-1] == ")")) begin
             return parse_real_weight_group(s);
         end
-        // 单权重项
         else if (aip_str::str_find(s, ":=") != -1 || aip_str::str_find(s, ":/") != -1) begin
             return parse_real_weight_group($sformatf("{%s}", s));
         end
-        // 范围 [min:max]
         else if (s.len() >= 3 && s[0] == "[" && s[s.len()-1] == "]") begin
             real rmin, rmax;
             parse_real_range(s, rmin, rmax);
             return rmin + (rmax - rmin) * ($urandom() / 4294967296.0);
         end
-        // inc/dec
         else if (aip_str::str_find(s, "inc:") != -1) begin
             return parse_real_inc_dec(s, 1);
         end
         else if (aip_str::str_find(s, "dec:") != -1) begin
             return parse_real_inc_dec(s, 0);
         end
-        // 列表随机
         else if (aip_str::str_find(s, ",") != -1) begin
             string rparts[] = aip_str::split(s, ",");
             int idx = $urandom_range(rparts.size()-1);
             return parse_real_literal(rparts[idx]);
         end
-        // 无括号范围 min:max
         else if (aip_str::str_find(s, ":") != -1) begin
             real rmin, rmax;
             parse_real_range(s, rmin, rmax);
             return rmin + (rmax - rmin) * ($urandom() / 4294967296.0);
         end
-        // 单值
         else begin
             return parse_real_literal(s);
         end
     endfunction
 
-    // real 单值公共入口，尾部可选参数向后兼容；用户宏自动传递文件名和行号。
+    // 尾部来源参数可选以兼容旧调用方，用户宏自动传入 __FILE__/__LINE__。
     static function void get_single_value(string name, string path, real default_val, ref real val,
                                            input string source_file = "", input int source_line = 0);
         aip_cmdline_diagnostic::push(aip_cmdline_diagnostic::full_name(name, path), source_file, source_line);
@@ -1333,10 +1243,7 @@ class aip_cmdline_real;
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // real 与整数入口一致：非空 override 复用 plusarg 的范围/列表/权重/步长求值。
-    // 每次读取才抽样；固定 override 直接校验/转换，避免完整表达式解析的扫描开销。
-    // 空 override 返回 0.0，缺失参数使用 default_val。
-    // 原参数来源一直保留在诊断栈中，非法表达式沿现有 hard fatal 路径结束。
+    // 与整数入口一致：非空 override 每次读取时按 plusarg 语法求值，字面量直接转换以省去完整解析的扫描开销。
     protected static function void get_single_value_impl(string name, string path, real default_val, ref real val);
         string	s;
         bit	is_ov;
@@ -1360,7 +1267,6 @@ class aip_cmdline_real;
         val = parse_value(s);
     endfunction
 
-    // real 动态数组公共入口：一次无时序调用持有来源，内部提前返回不泄漏上下文。
     static function void get_dynamic_array(string name, string path, real default_val, ref real arr[],
                                             input string source_file = "", input int source_line = 0);
         aip_cmdline_diagnostic::push(aip_cmdline_diagnostic::full_name(name, path), source_file, source_line);
@@ -1368,8 +1274,7 @@ class aip_cmdline_real;
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // real 动态数组内部实现；每个元素解析前记录其键和完整输入。
-    // .size 保持确定整数字面量语义，并检查语法/非负/int 上限后才分配，禁止截断或负数回退。
+    // .size 只接受确定的整数字面量，校验非负且不超过 int 上限后才分配，不截断、不回退。
     protected static function void get_dynamic_array_impl(string name, string path, real default_val, ref real arr[]);
         string size_str;
         int size;
@@ -1377,7 +1282,6 @@ class aip_cmdline_real;
         real overall_vals[];
         string parts[];
 
-        // 1. 获取 .size
         size_str = aip_cmdline#(int)::get_cmdline_string({name, ".size"}, path);
         aip_cmdline_diagnostic::select_value(aip_cmdline_diagnostic::full_name({name, ".size"}, path), size_str);
         if (size_str != "") begin
@@ -1394,12 +1298,10 @@ class aip_cmdline_real;
             size = -1;
         end
 
-        // 2. 获取整体赋值
         overall_str = aip_cmdline#(int)::get_cmdline_string(name, path);
         aip_cmdline_diagnostic::select_value(aip_cmdline_diagnostic::full_name(name, path), overall_str);
         if (overall_str != "") begin
             string cleaned = aip_str::remove_all_spaces(overall_str);
-            // 使用 aip_cmdline 的智能分割
             aip_cmdline#(int)::split_array_elements(cleaned, parts);
             foreach (parts[i]) parts[i] = aip_str::strip(parts[i]);
             overall_vals = new[parts.size()];
@@ -1410,7 +1312,6 @@ class aip_cmdline_real;
             end
         end
 
-        // 3. 确定大小
         if (size == -1) begin
             if (overall_vals.size() > 0)
                 size = overall_vals.size();
@@ -1420,11 +1321,9 @@ class aip_cmdline_real;
             end
         end
 
-        // 4. 初始化
         arr = new[size];
         for (int i = 0; i < size; i++) arr[i] = default_val;
 
-        // 5. 应用整体赋值
         if (overall_vals.size() > 0) begin
             int copy_len = (overall_vals.size() < size) ? overall_vals.size() : size;
             for (int i = 0; i < copy_len; i++) arr[i] = overall_vals[i];
@@ -1433,14 +1332,10 @@ class aip_cmdline_real;
 
 endclass
 
-//-------------------------------------------------------------------------
-// aip_cmdline_struct - 结构体紧凑格式解析辅助类
-//-------------------------------------------------------------------------
 class aip_cmdline_struct;
 
-    // 解析旧版紧凑格式 {key=val,key=val,...}，覆盖输出队列；不支持字段值内的逗号。
-    // 原文保留在同步上下文中；缺括号、缺等号、空字段/值、空分段立即 fatal，
-    // 防止拼写错误被静默丢弃后继续使用默认值。空对象 {} 仍然合法。
+    // 解析旧版紧凑格式 {key=val,...}，不支持值内逗号；缺括号/等号、空键值或空分段立即 fatal，
+    // 防止拼写错误被静默丢弃而沿用默认值。空对象 {} 合法。
     static function void parse_compact(string s, ref string keys[$], ref string vals[$]);
         string inner;
         int eq_pos;
@@ -1449,7 +1344,6 @@ class aip_cmdline_struct;
         keys = {};
         vals = {};
 
-        // 去除外层 { }
         s = aip_str::strip(s);
         if (s.len() < 2 || s[0] != "{" || s[s.len()-1] != "}") begin
             aip_cmdline_diagnostic::report("AIP_CORE[cmdline_struct] Error",
@@ -1462,7 +1356,7 @@ class aip_cmdline_struct;
             return;
         end
 
-        // 逐段解析 key=val,key=val,...（避免 split 动态数组 resize 问题）
+        // 手工逐段扫描而非 split，避开 split 的动态数组 resize 问题。
         begin
             int start = 0;
             int comma_pos, inner_len;
@@ -1497,7 +1391,6 @@ class aip_cmdline_struct;
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 在 keys 中查找指定 key，返回对应 val，未找到返回 ""
     static function string find_key(string keys[$], string vals[$], string key);
         foreach (keys[i]) begin
             if (keys[i] == key) return vals[i];
@@ -1507,9 +1400,7 @@ class aip_cmdline_struct;
 
 endclass
 
-//-------------------------------------------------------------------------
-// aip_cmdline_print_control - registration log throttling shared by all macros
-//-------------------------------------------------------------------------
+// Registration log throttling shared by all macros.
 class aip_cmdline_print_control;
     static bit print_enable = 1;
     static int max_prints = 10;

@@ -1,8 +1,4 @@
-//===========================================================
-// src/sv/ral：报告类型和纯格式化工具；不拥有模型、不发起任何DUT访问。
-// 由aip_core_pkg统一包含，调用者拥有每次运行的数据实例。
-// Task1仅提供报告/错误envelope底座；完整ral_op成功字段由Task5接入。
-//===========================================================
+// RAL 报告类型与纯格式化工具：不拥有模型、不发起 DUT 访问，每次运行的数据实例归调用者。
 `ifndef AIP_RAL_TYPES_SV
 `define AIP_RAL_TYPES_SV
 
@@ -40,7 +36,6 @@ typedef enum {AIP_RAL_RESTORE_NOT_REQUIRED, AIP_RAL_RESTORE_COMPLETED,
 typedef enum {AIP_RAL_MEM_NONE, AIP_RAL_MEM_ADDRESS_LINE, AIP_RAL_MEM_ALL} aip_ral_mem_mode_e;
 typedef enum {AIP_RAL_SCOPE_NONE, AIP_RAL_SCOPE_SELECTED, AIP_RAL_SCOPE_ALL} aip_ral_restore_scope_e;
 
-// 无状态枚举命名层，供快照与格式器共用，不持有任何业务资源。
 class aip_ral_names;
     // 去掉内部枚举前缀，外部错误码命名空间保持稳定。
     static function string code(aip_ral_code_e value);
@@ -98,7 +93,6 @@ class aip_ral_report;
     aip_ral_tristate_e side_effects=AIP_RAL_ZERO,partial=AIP_RAL_ZERO;
     aip_ral_restore_e restore=AIP_RAL_RESTORE_NOT_REQUIRED;
     bit resumed=1,recovery_required;
-    // 构造调用者拥有的单次快照，不绑定service或任何模型句柄。
     function new(); endfunction
 
     // 采用扩展位宽求和，拒绝uint64溢出伪造的计数守恒。
@@ -127,7 +121,6 @@ class aip_ral_leaf_record;
     bit is_memory;
     aip_ral_leaf_status_e status=AIP_RAL_LEAF_PENDING;
     aip_ral_code_e code=AIP_RAL_CODE_NONE;
-    // 记录单次inventory中的唯一对象；不持有DUT或RAL所有权。
     function new(aip_ral_leaf_id_t id0,string name0,bit memory0);
         id=id0;
         canonical_name=name0;
@@ -135,12 +128,11 @@ class aip_ral_leaf_record;
     endfunction
 endclass
 
-// 单次命令账本拥有全部叶记录；提供listener所需深拷贝/中断结账，不拥有锁或测试策略。
+// 单次命令账本：拥有全部叶记录（leaf ID 仅在本次 run 内有效），提供 listener 所需深拷贝/中断结账，不拥有锁或测试策略。
 class aip_ral_run_state extends aip_ral_report;
     local aip_ral_leaf_record leaves[$];
     local string global_root;
     local longint unsigned global_case;
-    // 每次命令新建实例；leaf ID只在本次run内有效，不跨命令复用状态。
     function new(); super.new(); endfunction
 
     // 原子发布用深拷贝：标量/string值复制，私有leaf逐一复制，绝不借用调用者记录。
@@ -162,7 +154,7 @@ class aip_ral_run_state extends aip_ral_report;
         return inventory_complete && id0 != 0 && id0 <= leaves.size();
     endfunction
 
-    // 内部诊断只读访问，返回本次leaf的终止原因；未知/未提交ID返回空串。
+    // 未知/未提交 ID 返回空串。
     function string leaf_reason(aip_ral_leaf_id_t id0);
         if (!contains_leaf(id0)) return "";
         return leaves[id0-1].reason;
@@ -312,7 +304,7 @@ class aip_ral_run_state extends aip_ral_report;
     endfunction
 endclass
 
-// 纯输出层不拥有调用者数据；普通命令尚未接入，不能把底座成功误称命令成功。
+// 纯输出层，不拥有调用者数据。
 class aip_ral_formatter;
     // UTF-8文本转ASCII安全Tcl元素；非BMP用Tcl8.6支持的UTF-16转义对。
     static function string element(string value,output bit ok);

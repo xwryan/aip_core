@@ -1,8 +1,5 @@
-// tests/sv：独立注入队列生产门禁，复用真实 cw_test 的 driver/sequencer。
-// 依赖同目录 test_cmd_wait.sv 和统一 package；本测试拥有请求引用与断言，
-// 生产服务拥有队列和线程。仅测试 top 启动服务，不运行普通 Tcl $stop 循环。
-// 测试覆盖原同步 sequence 保持、FIFO/legacy串行、准入公平、容量、回收、
-// 取消、绝对期限和真实传输 ACK；总期限避免错误导致无人观察的无限仿真。
+// 独立注入队列生产门禁：复用 test_cmd_wait.sv 的 cw_test driver/sequencer，仅由测试 top 启动服务。
+// 覆盖同步 sequence 保持、FIFO/legacy 串行、准入公平、容量、回收、取消、绝对期限与真实传输 ACK。
 `timescale 1ns/1ps
 `include "tests/sv/test_cmd_wait.sv"
 
@@ -25,24 +22,22 @@ endclass
 `aip_cmd_str_1i(iq_old_a, iq_legacy_ops::first, text, "")
 `aip_cmd_str_1i(iq_old_b, iq_legacy_ops::second, text, "")
 
-// 沿用原 UVM driver，所有断言均通过公开状态/输出观察，不读取核心私锁。
+// 断言只经公开状态/输出观察，不读核心私锁。
 class iq_test extends cw_test;
     `uvm_component_utils(iq_test)
     int checks = 0;
 
-    // 标准 UVM 构造；资源实际创建仍由父 build/connect phase 完成。
     function new(string name = "iq_test", uvm_component parent = null);
         super.new(name, parent);
     endfunction
 
-    // 任一失败终止仿真，外部还需检查总 PASS 和 UVM report 错误数量。
     function void verify(string label, bit condition);
         checks++;
         if (!condition) `uvm_fatal("INJECT_CHECK", label)
         $display("INJECT_CHECK_PASS %s", label);
     endfunction
 
-    // 直接提交用于机制测试；接收ACK0之外还检查对象确已交给服务持有。
+    // 除 ACK0 外还检查对象确已交由服务持有。
     function aip_inject_job enqueue(string command, int unsigned timeout_ns = 0);
         aip_inject_job job;
         int status;
@@ -67,8 +62,7 @@ class iq_test extends cw_test;
         __inject_request_trigger = 0;
     endtask
 
-    // 保持同步原命令并逐层验证资源与结果；容量循环有真实排队阻塞者，
-    // 不将完成/STARTED/BUSY假冒为任务执行。运行超时从不强杀driver。
+    // 容量循环有真实排队阻塞者，不把完成/STARTED/BUSY 当作任务执行；运行超时从不强杀 driver。
     task run_phase(uvm_phase phase);
         aip_inject_job front, first, second, old_a, old_b, local_job;
         aip_inject_job expired, timed, cancelled, capacity[32], rejected, reused;

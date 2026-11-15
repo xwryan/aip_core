@@ -1,5 +1,4 @@
-// tests/sv 层：覆盖非权重解析失败的用户来源、原始输入和立即终止行为。
-// 每个负例独立运行；驱动器先剔除期望标记，再校验真实 FATAL 及非零退出码。
+// 非权重解析失败的诊断测试：用户来源、原始输入与立即终止；每个负例独立运行，驱动器校验真实 FATAL 与非零退出码。
 `include "aip_log.sv"
 `include "aip_cmdline.sv"
 
@@ -22,7 +21,7 @@ module test_cmdline_diagnostics;
     uvm_root root;
     string case_name, raw;
 
-    // 用独立前缀输出期望；缺失参数使用显式 <missing>，不伪装成空串输入。
+    // 缺失参数用显式 <missing>，不伪装成空串输入。
     task automatic expect_error(string key, string value, int line,
                                 string source_file = "test_cmdline_diagnostics.sv");
         $display("DIAG_EXPECT_KEY %s", key);

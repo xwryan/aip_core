@@ -1,7 +1,5 @@
-// tests/sv：测量标量宏读取的主机 CPU/墙钟开销，比较 plusarg 与 set_param 数据源。
-// 依赖公开 standalone 入口和 tests/bench/cmdline_bench_clock.c；不推进仿真时间。
-// 本模块拥有参数、目标变量及 checksum；override 仅在计时前安装一次，打印全程关闭。
-// 同一源码可在旧基线编译；旧版 override 只测试固定值，随机表达式以旧版 plusarg 作参照。
+// 测量标量宏读取的主机 CPU/墙钟开销，比较 plusarg 与 set_param 数据源；不推进仿真时间。
+// 同一源码可在旧基线编译：旧版 override 只测固定值，随机表达式以 plusarg 作参照。
 `include "aip_log.sv"
 `include "aip_cmdline.sv"
 
@@ -24,8 +22,7 @@ module test_set_param_benchmark;
     real				wall_elapsed;
     process				owner;
 
-    // 真实宏调用；计时循环与预热共用同一路径，不缓存抽样值。
-    // kind/表达式在运行前验证，读取错误由正式解析器 fatal。
+    // 计时循环与预热共用同一真实宏路径，不缓存抽样值。
     task automatic read_one();
         if (kind == "int") begin
             `aip_int("bench", int, iv, 0)

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# tests/checkpoint：在 VCS 主机编译并执行参数恢复矩阵，默认同时覆盖源码/.so loader。
-# 本脚本拥有 mktemp 独立目录中的 binary/日志/快照，退出时保留证据；不清理其它测试产物。
-# 依赖 VCS、bash、timeout、make/gcc（.so 模式）；仅真实 timeout 允许最多三次重试。
+# 在 VCS 主机编译并执行参数恢复矩阵（默认覆盖源码与 .so loader）；产物放 mktemp 目录并保留作证据。
+# 仅真实 timeout 允许最多三次重试。
 set -euo pipefail
 ckpr_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 export AIP_CORE="$ckpr_root"
@@ -30,8 +29,7 @@ vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -debug_access+r+w+f -full64 -lca 
         exit 1
     }
 
-# 阶段参数原样作为数组传给 simv，保留重复项、空后缀、空格和额外等号。
-# 除 rc 外还核对真实行首完成/采样/初始化标记；异常诊断绝不通过 retry 掩盖。
+# 阶段参数原样作为数组传给 simv（保留重复项、空后缀、空格和额外等号）；异常诊断绝不靠重试掩盖。
 ckpr_run() {
     local ckpr_phase=$1 ckpr_samples=$2
     shift 2

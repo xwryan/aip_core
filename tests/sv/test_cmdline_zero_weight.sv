@@ -1,6 +1,4 @@
-// tests/sv 层：验证命令行零权重语义及用户调用位置诊断。
-// 依赖 aip_log/aip_cmdline；本模块持有测试值，override 表仅在当前仿真内有效。
-// 错误用例分别启动进程，Makefile 同时校验 FATAL、非零退出码和用户来源。
+// 命令行零权重语义及用户调用位置诊断测试；错误用例分别启动进程，Makefile 校验 FATAL、非零退出码和用户来源。
 `include "aip_log.sv"
 `include "aip_cmdline.sv"
 
@@ -21,19 +19,17 @@ module test_cmdline_zero_weight;
     record_t record, records[], legacy, bad_legacy, bad_record, bad_records[];
     string case_name;
 
-    // 条件失败立即终止，保证成功标记只在全部断言完成后出现。
     task automatic check(bit condition, string message);
         if (!condition) $fatal(1, "ZERO_WEIGHT_CHECK_FAIL: %s", message);
     endtask
 
-    // 输出期望的键和值供驱动器校验；驱动器剔除这些行后再搜索真实错误文本。
+    // 驱动器剔除这些期望行后再搜索真实错误文本。
     task automatic expect_error(string key, string value);
         $display("WEIGHT_EXPECT_KEY %s", key);
         $display("WEIGHT_EXPECT_VALUE %s", value);
     endtask
 
-    // 多次抽样确保零权重首项、中间项、末项及 rand 分支从不被选中。
-    // 本测试保留 plusarg 权重覆盖；运行期 override 的同语法回归见 test_set_param_expressions。
+    // 多次抽样确保零权重的首/中/末项及 rand 分支从不被选中；运行期 override 的同语法回归见 test_set_param_expressions。
     task automatic run_positive();
         aip_cmdline_print_control::configure(0, 0);
         repeat (128) begin
@@ -104,8 +100,7 @@ module test_cmdline_zero_weight;
         $display("CMDLINE_ZERO_WEIGHT_PASS");
     endtask
 
-    // 逐例触发真实错误；源行号在调用宏之前动态记录，修改测试行数不会破坏断言。
-    // 所有案例关闭普通参数打印，验证诊断不受 print_enable/max_prints 限制。
+    // 源行号在调用宏前动态记录（改动行数不破坏断言）；普通参数打印全关，验证诊断不受 print_enable/max_prints 限制。
     task automatic run_negative();
         aip_cmdline_print_control::configure(0, 0);
         case (case_name)

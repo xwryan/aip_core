@@ -1,6 +1,4 @@
-//===========================================================
-// test_cpu_mem72.sv — RAM72 backdoor behavior specification
-//===========================================================
+// RAM72 backdoor behavior specification.
 `include "aip_core_pkg.sv"
 `include "aip_cpu_mem.sv"
 `include "fake_mem.sv"
@@ -320,9 +318,8 @@ module tb;
                 packed40_word(8'h01, 8'h23, 8'h45, 8'h67));
         $fclose(fh);
 
-        // Earlier tests intentionally exercised these physical words.  Clear
-        // them so the packed40 partial-word deposits are checked without
-        // depending on pre-existing low groups.
+        // Earlier tests touched these physical words; clear them so the packed40
+        // partial-word deposits do not depend on pre-existing low groups.
         cpu_ram[0].u00_ram.mem[0][0] = 72'd0;
         cpu_ram[0].u00_ram.mem[0][1] = 72'd0;
         loader.load_image("tmp_packed40.hex", 0, "packed40");

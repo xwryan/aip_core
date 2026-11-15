@@ -9,36 +9,18 @@ reg __cpu_bridge_irq = 0;
 // User must set up a monitor in testbench (see aip_cpu_bridge_monitor macro)
 event __cpu_bridge_rsp_event;
 
-// ============================================================
-// aip_mem_accessor — abstract base class for backdoor memory access
-// User implements wr_mem/rd_mem with project-specific hdl paths.
-// ============================================================
+// Backdoor memory access base: users implement wr_mem/rd_mem with project-specific hdl paths.
 virtual class aip_mem_accessor;
     pure virtual task wr_mem(input longint unsigned addr, input int unsigned data);
     pure virtual task rd_mem(input longint unsigned addr, output int unsigned data);
 endclass
 
-// ============================================================
-// aip_cpu_bridge — send commands to CPU firmware via shared memory mailbox
-//
-// Mailbox layout (base + offset):
-//   +0x000  cmd_flag    (4B)  1=pending 0=idle
-//   +0x004  cmd_len     (4B)  command string length
-//   +0x008  cmd_data    (512B) command string bytes
-//   +0x208  rsp_flag    (4B)  1=ready 0=idle
-//   +0x20C  rsp_status  (4B)  0=ok -1=error
-//   +0x210  rsp_len     (4B)  response string length
-//   +0x214  rsp_data    (512B) response string bytes
-//   +0x414  async_flag  (4B)  1=async 0=sync
-//
-// Usage:
-//   aip_cpu_bridge::init(mem_accessor, 64'h800E_0000);
-//   aip_cpu_bridge::enable_irq();  // optional: pulse aip_core_pkg::__cpu_bridge_irq on send
-//   assign cpu.irq_ext[0] = aip_core_pkg::__cpu_bridge_irq;  // user connects in testbench
-// ============================================================
+// Sends commands to CPU firmware through a shared-memory mailbox (base + offset):
+//   +0x000 cmd_flag 1=pending, +0x004 cmd_len, +0x008 cmd_data (one word per char),
+//   +0x208 rsp_flag 1=ready, +0x20C rsp_status 0=ok/-1=error, +0x210 rsp_len, +0x214 rsp_data, +0x414 async_flag.
+// Usage: init(mem_accessor, base); optionally enable_irq() and `assign cpu.irq_ext[0] = aip_core_pkg::__cpu_bridge_irq;`
 class aip_cpu_bridge;
 
-    // Mailbox offsets
     localparam longint unsigned OFF_CMD_FLAG   = 'h000;
     localparam longint unsigned OFF_CMD_LEN    = 'h004;
     localparam longint unsigned OFF_CMD_DATA   = 'h008;
@@ -67,7 +49,6 @@ class aip_cpu_bridge;
     static bit              plic_single_bit = 0;    // 0=RMW IP word; 1=deposit 单个 bit
     static bit              plic_mode       = 0;    // 1 = PLIC 唤醒模式
 
-    // Initialize bridge with user-provided mem accessor and mailbox base address
     static function void init(aip_mem_accessor m, longint unsigned mbox_base);
         mem = m;
         mailbox_base = mbox_base;
@@ -76,26 +57,20 @@ class aip_cpu_bridge;
         `aip_info(("[AIP_CPU_BRIDGE] Initialized, mailbox_base=0x%0h", mbox_base));
     endfunction
 
-    // Enable IRQ mode — send_cmd raises aip_core_pkg::__cpu_bridge_irq until ISR ACK
-    // User must connect: assign cpu.irq_ext[0] = aip_core_pkg::__cpu_bridge_irq;
+    // send_cmd raises __cpu_bridge_irq until the ISR acks; connect it to the CPU IRQ pin.
     static function void enable_irq();
         irq_enabled = 1;
         `aip_info(("[AIP_CPU_BRIDGE] IRQ mode enabled (signal: __cpu_bridge_irq)"));
     endfunction
 
-    // Enable event-driven mode — send_cmd uses @(__cpu_bridge_rsp_event)
-    // instead of #10 polling. Requires user to set up monitor macro.
-    // Usage:
-    //   aip_cpu_bridge::enable_event_mode();
-    //   `aip_cpu_bridge_monitor(tb.ram.mem, 0)  // in module scope
+    // send_cmd waits on __cpu_bridge_rsp_event instead of #10 polling; needs `aip_cpu_bridge_monitor in module scope.
     static function void enable_event_mode();
         event_mode = 1;
         `aip_info(("[AIP_CPU_BRIDGE] Event-driven mode enabled (signal: __cpu_bridge_rsp_event)"));
     endfunction
 
-    // Enable MSIP wake mode — send_cmd deposits MSIP0=1 to wake CPU from wfi.
-    // path = HDL path to the CLINT MSIP0 register (testbench/SoC provides).
-    // MSIP wake and event_mode are independent; caller controls event_mode separately.
+    // MSIP wake: send_cmd deposits MSIP0=1 at path (CLINT MSIP0 register) to wake the CPU from wfi;
+    // independent of event_mode.
     static function void set_msip_path(string path);
         msip_path = path;
         msip_mode = 1;
@@ -129,20 +104,17 @@ class aip_cpu_bridge;
         end
     endtask
 
-    // Set response timeout (ns). Default 100us. Set 0 to disable.
+    // Response timeout in ns (0 disables).
     static function void set_timeout(real ns);
         timeout_ns = ns;
         `aip_info(("[AIP_CPU_BRIDGE] Timeout set to %.0f ns", ns));
     endfunction
 
-    // Write a string to mailbox cmd_data area (one word per char)
     static task write_cmd_string(string s);
         int len;
         len = s.len();
         if (len > CMD_DATA_MAX) len = CMD_DATA_MAX;
-        // Write length
         mem.wr_mem(mailbox_base + OFF_CMD_LEN, len);
-        // Write chars as 32-bit words
         for (int i = 0; i < len; i++) begin
             begin
                 int unsigned _ch = s[i];
@@ -151,7 +123,6 @@ class aip_cpu_bridge;
         end
     endtask
 
-    // Read response string from mailbox rsp_data area
     static task read_rsp_string(output string s);
         int unsigned len;
         int unsigned ch;
@@ -164,16 +135,12 @@ class aip_cpu_bridge;
         end
     endtask
 
-    // Raise package IRQ signal (held until irq_ack_monitor drops it)
-    // User connects: assign cpu.irq_ext[0] = aip_core_pkg::__cpu_bridge_irq;
+    // Held until irq_ack_monitor drops it.
     static task trigger_irq();
         if (irq_enabled) __cpu_bridge_irq = 1;
     endtask
 
-    // ============================================================
-    // IRQ ACK monitor — drops __cpu_bridge_irq when C ISR signals ack.
-    // Started by start_monitors() (call once after init() if IRQ used).
-    // ============================================================
+    // Drops __cpu_bridge_irq when the C ISR acks; started by start_monitors() (once after init() if IRQ is used).
     static task irq_ack_monitor();
         int unsigned ack;
         forever begin
@@ -194,9 +161,7 @@ class aip_cpu_bridge;
         `aip_info(("[AIP_CPU_BRIDGE] Monitors started (irq_ack)"));
     endtask
 
-    // Send command to CPU via mailbox
-    // If async=0: waits for response, returns status and result string
-    // If async=1: returns immediately after writing command
+    // async=1 returns right after writing the command; async=0 waits for the response or timeout.
     static task send_cmd(string cmd, bit is_async, output int status, output string result);
         int unsigned rsp_flag;
         int unsigned rsp_status;
@@ -213,19 +178,16 @@ class aip_cpu_bridge;
         // Clear rsp_flag before sending (prevent stale response)
         mem.wr_mem(mailbox_base + OFF_RSP_FLAG, 0);
 
-        // Write async flag
         begin
             int unsigned _async_val = is_async;
             mem.wr_mem(mailbox_base + OFF_ASYNC_FLAG, _async_val);
         end
 
-        // Write command string
         write_cmd_string(cmd);
 
         // Set cmd_flag = 1 (must be last — C polls this)
         mem.wr_mem(mailbox_base + OFF_CMD_FLAG, 1);
 
-        // Trigger IRQ if configured
         trigger_irq();
 
         // MSIP wake: 后门 deposit MSIP0=1 唤醒 wfi 中的 CPU
@@ -246,8 +208,7 @@ class aip_cpu_bridge;
             return;
         end
 
-        // Synchronous: fork — wait response vs timeout
-        // 外层 fork-begin-join 隔离 disable fork 作用域
+        // 同步：等待响应与超时竞速；外层 fork-begin-join 隔离 disable fork 的作用域。
         begin
             bit timed_out;
             bit cpu_exited;
@@ -258,27 +219,21 @@ class aip_cpu_bridge;
             fork
                 begin
                     fork
-                        // Branch 1: 等待响应（事件驱动 or 轮询）
                         begin
                             if (event_mode) begin
-                                // 事件模式: 等 __cpu_bridge_rsp_event
-                                // memory 变化 → monitor 触发事件 → 立即唤醒.
-                                // monitor 宏同时监视 rsp_flag 和 exit_flag; 若 CPU
-                                // 在发送前已退出 (exit_flag 已为 2), 不会再有跳变,
-                                // 先读一次再等事件.
+                                // 事件模式：monitor 同时监视 rsp_flag 与 exit_flag；CPU 若在发送前已退出（exit_flag=2）
+                                // 不会再有跳变，故先读一次再等事件。
                                 mem.rd_mem(mailbox_base + OFF_EXIT_FLAG, rsp_flag);
                                 if (rsp_flag != 2) begin
                                     @(__cpu_bridge_rsp_event);
-                                    // 事件触发后检查是否是 exit
                                     mem.rd_mem(mailbox_base + OFF_EXIT_FLAG, rsp_flag);
                                 end
                                 if (rsp_flag == 2) begin
                                     cpu_exited = 1;
                                 end else begin
-                                    rsp_flag = 1;  // 标记响应到达
+                                    rsp_flag = 1;
                                 end
                             end else begin
-                                // 轮询模式: #10 循环
                                 while (rsp_flag != 1 && !cpu_exited) begin
                                     int unsigned exit_flag;
                                     #10;
@@ -292,7 +247,6 @@ class aip_cpu_bridge;
                             end
                         end
 
-                        // Branch 2: timeout 保护
                         begin
                             if (timeout_ns > 0) begin
                                 aip_time::delay_ns(timeout_ns);
@@ -306,7 +260,6 @@ class aip_cpu_bridge;
                 end
             join;
 
-            // 处理结果
             if (timed_out) begin
                 `aip_error(("[AIP_CPU_BRIDGE] TIMEOUT (%.0f ns) waiting for CPU response, cmd='%s'", timeout_ns, cmd));
                 status = -1;
@@ -324,7 +277,6 @@ class aip_cpu_bridge;
                 status = -1;
                 result = $sformatf("ERROR: CPU exited (code=%0d) during command", exit_code);
             end else begin
-                // 正常响应
                 mem.rd_mem(mailbox_base + OFF_RSP_STATUS, rsp_status);
                 read_rsp_string(result);
                 status = int'(rsp_status);
@@ -334,8 +286,7 @@ class aip_cpu_bridge;
         end
     endtask
 
-    // Request CPU to exit cmd_loop (SV → C)
-    // C 侧 cmd_loop 检测 exit_flag==1 后退出循环
+    // SV -> C: set exit_flag=1 so the firmware cmd_loop returns.
     static task request_cpu_exit();
         if (!initialized) return;
         mem.wr_mem(mailbox_base + OFF_EXIT_FLAG, 1);
@@ -353,9 +304,7 @@ class aip_cpu_bridge;
         `aip_info(("[AIP_CPU_BRIDGE] Requested CPU exit"));
     endtask
 
-    // Check if CPU requested exit (C → SV)
-    // C 侧调 cmd_exit() 后 exit_flag==2, SV 侧检测到后处理
-    // 返回: 0=未退出, 1=正常退出, -1=异常退出
+    // C -> SV: firmware cmd_exit() sets exit_flag=2. exit_status: 0 = running, 1 = normal exit, -1 = error exit.
     static task check_cpu_exit(output int exit_status);
         int unsigned flag;
         int unsigned code;
@@ -379,11 +328,7 @@ class aip_cpu_bridge;
 
 endclass
 
-// ============================================================
-// Built-in CPU commands macro
-// C 侧调 cmd_register_builtins()，SV 侧调此宏，两侧匹配
-// Usage: `aip_cpu_bridge_builtins
-// ============================================================
+// 内建 CPU 命令：SV 侧展开此宏，须与 C 侧 cmd_register_builtins() 一一匹配。
 `define aip_cpu_bridge_builtins \
     `aip_cmd_cpu(cpu_read32) \
     `aip_cmd_cpu(cpu_write32) \
@@ -397,12 +342,7 @@ endclass
     `__aip_cpu_bridge_sv_builtins \
     `__aip_cpu_bridge_exit_cmds
 
-// ============================================================
-// SV 后门命令宏: cpu_memset / cpu_memdump
-// 不走 CPU，直接通过 aip_mem_accessor backdoor 访问
-// 必须在 aip_cmd.sv 之后展开（依赖 aip_cmd 类）
-// 通过 `aip_cpu_bridge_builtins 宏自动注册
-// ============================================================
+// SV 后门命令 cpu_memset/cpu_memdump：不经 CPU，直接走 aip_mem_accessor；须在 aip_cmd.sv 之后展开（由 `aip_cpu_bridge_builtins 自动注册）。
 `define __aip_cpu_bridge_sv_builtins \
 class \__aip_cmd_cpu_memset extends aip_cmd; \
     task cmd_exec(); \
@@ -437,7 +377,6 @@ class \__aip_cmd_cpu_memset extends aip_cmd; \
     function new(string name); super.new(name); endfunction \
     static \__aip_cmd_cpu_memset __inst = new("cpu_memset"); \
 endclass \
-\
 class \__aip_cmd_cpu_memdump extends aip_cmd; \
     task cmd_exec(); \
         longint unsigned addr; \
@@ -483,11 +422,7 @@ class \__aip_cmd_cpu_memdump extends aip_cmd; \
     static \__aip_cmd_cpu_memdump __inst = new("cpu_memdump"); \
 endclass
 
-// ============================================================
-// Exit commands:
-//   cpu_exit         — TCL/SV 通知 C 退出 cmd_loop
-//   (C 侧 cmd_exit) — C 通知 SV 异常退出（通过 exit_flag=2）
-// ============================================================
+// 退出命令：cpu_exit 由 Tcl/SV 通知 C 退出 cmd_loop；C 侧 cmd_exit 经 exit_flag=2 通知 SV 异常退出。
 `define __aip_cpu_bridge_exit_cmds \
 class \__aip_cmd_cpu_exit extends aip_cmd; \
     task cmd_exec(); \
@@ -499,22 +434,9 @@ class \__aip_cmd_cpu_exit extends aip_cmd; \
     static \__aip_cmd_cpu_exit __inst = new("cpu_exit"); \
 endclass
 
-// ============================================================
-// Monitor macro — 监控 memory model 的 rsp_flag 变化，触发事件
-// 放在 module 作用域（initial/always 块所在的地方）
-//
-// 参数:
-//   mem_path  — memory 数组的 hdl path (如 tb.ram.mem)
-//   base_idx  — mailbox 基地址对应的 word index (如 0x800E0000>>2)
-//
-// rsp_flag  offset = 0x208, word index = base_idx + 0x208/4 = base_idx + 130
-// exit_flag offset = 0x418, word index = base_idx + 0x418/4 = base_idx + 262
-// (C 退出时只写 exit_flag=2, 不写 rsp_flag; 事件模式必须也被它唤醒)
-//
-// Usage:
-//   `aip_cpu_bridge_monitor(tb.ram.mem, 0)       // base_idx=0
-//   `aip_cpu_bridge_monitor(soc.ram.mem, 960)     // 0xF00>>2 = 960
-// ============================================================
+// 监控 memory model 的 rsp_flag/exit_flag 变化并触发 __cpu_bridge_rsp_event，放在 module 作用域。
+// mem_path = memory 数组 hdl path；base_idx = mailbox 基址的 word index（rsp_flag = base_idx+130，exit_flag = base_idx+262）。
+// C 退出时只写 exit_flag=2，事件模式也必须被它唤醒。用法：`aip_cpu_bridge_monitor(tb.ram.mem, 0)
 `define aip_cpu_bridge_monitor(mem_path, base_idx) \
     always @(mem_path[(base_idx) + 130]) begin \
         if (mem_path[(base_idx) + 130] == 1) \
@@ -525,25 +447,16 @@ endclass
             -> aip_core_pkg::__cpu_bridge_rsp_event; \
     end
 
-// ============================================================
-// aip_cpu_bridge_ops — TCL-friendly wrapper exposing aip_cpu_bridge static
-// methods as plain SV tasks (注册宏 aip_cmd_task / aip_cmd_1i 需 task 签名)
-//
-// 注册命令在 aip_cpu_bridge_cmds.sv (必须 include 在 aip_cmd.sv 之后)
-//
-// mem_accessor 仍需 testbench 调 aip_cpu_bridge_ops::set_mem(mem) 提供
-// (SV class 实例无法从 TCL 构造)
-// ============================================================
+// Tcl 友好的封装：把 aip_cpu_bridge 静态方法暴露为普通 task（注册宏 aip_cmd_task/aip_cmd_1i 需要 task 签名）。
+// SV 类实例无法从 Tcl 构造，testbench 仍需调用 set_mem(mem) 提供 accessor。
 class aip_cpu_bridge_ops;
     static aip_mem_accessor stored_mem = null;
 
-    // testbench 调用一次, 提供 mem accessor
     static function void set_mem(aip_mem_accessor m);
         stored_mem = m;
     endfunction
 
-    // 重新 init mailbox base (TCL 可调, mem 用之前注册的)
-    // VCS Q-2020 不支持 int unsigned'(...) cast, 用 int + {32'h0, x} 显式 zero-extend
+    // Tcl 可调；VCS Q-2020 不支持 int unsigned'(...) cast，故用 int + {32'h0, x} 显式零扩展。
     static task reinit(input int mbox_base);
         longint unsigned base_lu;
         if (stored_mem == null) begin
@@ -582,9 +495,7 @@ class aip_cpu_bridge_ops;
     endtask
 endclass
 
-// TCL 注册宏调用在 aip_core_pkg.sv 末尾 (须在 aip_cmd.sv include 之后,
-// 但 aip_cmd.sv 又必须在本文件之后, 形成循环依赖, 只能放 pkg 末尾)
-// 注册的 TCL 命令:
-//   sv_cpu_bridge_status / _set_timeout / _enable_irq / _enable_event_mode / _reinit / _set_msip_path
+// Tcl 命令（sv_cpu_bridge_status/_set_timeout/_enable_irq/_enable_event_mode/_reinit/_set_msip_path）在 aip_core_pkg.sv
+// 末尾注册：注册须在 aip_cmd.sv 之后，而 aip_cmd.sv 又须在本文件之后。
 
 `endif // AIP_CPU_BRIDGE_SV

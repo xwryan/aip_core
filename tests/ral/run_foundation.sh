@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# tests/ral：Task1真实模型生成、独立宽度构建及基础验证入口。
-# 本脚本只管理build/default或build/width128内产物，不删除其他构建；VCS必须在53运行。
-# UVM源码/DPI与测试同次编译，避免用户宏与预编译UVM的位宽不一致。
+# 真实模型生成、按宽度独立构建及基础验证入口；只管理 build/default 或 build/width128 内产物。
+# UVM 源码/DPI 与测试同次编译，避免用户宏与预编译 UVM 的位宽不一致。
 set -euo pipefail
 
 ral_script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -50,8 +49,7 @@ if grep -Eq '^Error-|^Fatal:|^UVM_(ERROR|FATAL)[[:space:]]+@' run.log; then
 fi
 test -s ral_records.txt
 
-# 使用VCS实际内嵌Tcl解释器校验同目录记录；不依赖远端不存在的独立tclsh。
-# 脚本在UCLI启动时直接解析文件并quit，不再次run测试、覆盖第一次的记录。
+# 用 VCS 内嵌 Tcl 解释器校验同目录记录（不依赖独立 tclsh）；UCLI 启动即解析并 quit，不重跑测试覆盖记录。
 timeout --kill-after=10s "${RAL_TIMEOUT:-120s}" ./simv -no_save -exitstatus -ucli \
     -do "$ral_root_dir/tests/tcl/test_ral_foundation.tcl" > tcl.log 2>&1
 grep -Eq '^RAL_FOUNDATION_TCL_PASS([[:space:]]|$)' tcl.log

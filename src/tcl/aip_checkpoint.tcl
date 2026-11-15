@@ -1,18 +1,10 @@
-# src/tcl：VCS快照与状态触发保存。快照文件归调用用户所有，bridge寄存器仍
-# 归SV package所有；保栈暂停时禁止保存/恢复/settle，避免破坏活跃调用栈。
-# 只在统一控制层可用时启用守卫，保持独立纯Tcl元数据/解析测试可用。
-# ============================================
-# aip_checkpoint.tcl - VCS save/restore 声明式断点
-# sourced by aip_cmd.tcl。恢复后的参数刷新依赖匹配版本的 SV request/ack 寄存器；
-# Tcl 本身不枚举 CLI，不重写业务配置。重新加载入口在任何仿真推进前发出失效请求。
-# 见 docs/superpowers/specs/2026-06-26-vcs-checkpoint-design.md
-# ============================================
+# VCS save/restore 断点与状态触发保存；保栈暂停时禁止保存/恢复/settle，以免破坏活跃调用栈。
+# 由 aip_cmd.tcl 加载；守卫仅在控制层已加载时启用，使纯 Tcl 元数据/解析测试可独立运行。
+# 设计见 docs/superpowers/specs/2026-06-26-vcs-checkpoint-design.md
 
-# ---------- config ----------
 if {![info exists ::aip_ckpt_dir]} { set ::aip_ckpt_dir "./aip_ckpt" }
-# ::aip_simv_path  — 可选, 覆盖 simv 自动探测
+# 可选 ::aip_simv_path：覆盖 simv 自动探测，探测不准导致 restore 校验误报时手动指定。
 
-# ---------- simv 路径解析 ----------
 proc _aip_simv_path {} {
     if {[info exists ::aip_simv_path] && $::aip_simv_path ne ""} {
         return $::aip_simv_path
@@ -24,7 +16,6 @@ proc _aip_simv_path {} {
     return $p
 }
 
-# ---------- meta 写 (key\tvalue 每行) ----------
 proc _aip_ckpt_write_meta {path arr_name} {
     upvar 1 $arr_name a
     if {[catch {set fh [open $path w]} err]} {
@@ -41,7 +32,6 @@ proc _aip_ckpt_write_meta {path arr_name} {
     close $fh
 }
 
-# ---------- meta 读 (返回 array get list) ----------
 proc _aip_ckpt_read_meta {path} {
     if {![file exists $path]} {
         error "aip_restore: meta not found: $path"
@@ -66,7 +56,6 @@ proc _aip_ckpt_read_meta {path} {
     return [array get meta]
 }
 
-# ---------- 有效性检查: 当前 simv 的 mtime+size vs meta ----------
 proc _aip_ckpt_validate {meta_list simv_path} {
     array set meta $meta_list
     if {![file exists $simv_path]} {
@@ -80,7 +69,7 @@ proc _aip_ckpt_validate {meta_list simv_path} {
     return 1
 }
 
-# ---------- bridge idle 检测 (4-reg, 同 aip_send_cmd 顶部逻辑) ----------
+# 判据与 aip_send_cmd 入口的 settle 检查保持一致。
 proc _aip_bridge_is_idle {} {
     if {![aip_parse_int [get aip_core_pkg::__tcl_bridge_idle]]}     { return 0 }
     if {[aip_parse_int [get aip_core_pkg::__tcl_cmd_trigger]] != 0} { return 0 }
@@ -89,7 +78,7 @@ proc _aip_bridge_is_idle {} {
     return 1
 }
 
-# ---------- 排干残留, 把 bridge 推回 idle ($stop) ----------
+# 排干残留请求，把 bridge 推回 idle（$stop）。
 proc _aip_bridge_settle {} {
     if {[info commands _aip_control_assert_idle] ne ""} {
         _aip_control_assert_idle checkpoint_settle
@@ -106,8 +95,7 @@ proc _aip_bridge_settle {} {
     return [_aip_bridge_is_idle]
 }
 
-# ---------- aip_checkpoint <name> [note=...] ----------
-# note 含空格时整体加引号: aip_checkpoint base "note=post linkup"
+# aip_checkpoint <name> [note=...]；note 含空格时整体加引号："note=post linkup"。
 proc aip_checkpoint {name args} {
     if {[info commands _aip_inject_assert_quiescent] ne ""} { _aip_inject_assert_quiescent aip_checkpoint }
     if {[info commands _aip_control_assert_idle] ne ""} {
@@ -128,8 +116,8 @@ proc aip_checkpoint {name args} {
     set meta_path [file join $::aip_ckpt_dir $name.meta]
     set simv      [_aip_simv_path]
 
-    # VCS 禁止在 $stop() 上下文 save (Error-[UCLI-SAVE-STOP]). bridge idle 点正是
-    # run_loop 的 $stop(0), 故 save 前必须 `run 0` 脱离 $stop 任务上下文 (0 时间推进).
+    # VCS 禁止在 $stop 上下文 save（Error-[UCLI-SAVE-STOP]），而 bridge idle 点
+    # 正是 run_loop 的 $stop(0)，故 save 前先 run 0 零时间脱离。
     if {[info commands _aip_advance] ne ""} {
         _aip_advance checkpoint 0
     } else { redirect /dev/null { _vcs_run 0 } }
@@ -147,14 +135,10 @@ proc aip_checkpoint {name args} {
     puts "\033\[36m\[AIP_CKPT\] saved '$name' @ $m(sim_time) -> $ckpt\033\[0m"
 }
 
-# ---------- aip_restore <name> ----------
-# 前置校验 meta 新鲜度 (mtime/size, 纯 Tcl file 检查, 安全), 再复用 VCS restore.
-# VCS restore 必须在 UCLI 顶层(全局帧)执行, 在 proc 内直接调会崩; 故用 uplevel #0 顶到
-# 全局帧执行 restore. restore 后须重新 source loader，使 AIP 参数源在推进前失效；
-# 后续 settle、发命令、run 仍交给用户脚本。成功恢复会丢弃快照之后新设的 Tcl
-# 变量，因此 loader 还须根据 started 存在/命令缺失重建 pending。若原生 restore
-# 报错，pending 留待重载；同一进程重取 CLI 无害，不能悄悄绕过参数源的版本检查。
-# 校验 misfire (simv 路径探测不准) 时: set ::aip_simv_path /abs/simv 手动指定绕过.
+# VCS restore 只能在 UCLI 全局帧执行（proc 内直接调会崩），故用 uplevel #0。
+# 恢复后须重新 source loader 使参数源在推进前失效；settle/发命令/run 仍由用户脚本负责。
+# 先置 pending 以便 restore 失败时重载；restore 成功会丢弃快照后新设的变量（含 pending），
+# 由 loader 据 started 存在且命令缺失重建。
 proc aip_restore {name} {
     if {[info commands _aip_inject_assert_quiescent] ne ""} { _aip_inject_assert_quiescent aip_restore }
     if {[info commands _aip_control_assert_idle] ne ""} {
@@ -177,8 +161,7 @@ proc aip_restore {name} {
     puts "\033\[32m\[AIP_CKPT\] restored '$name' -> $ckpt\033\[0m"
 }
 
-# ---------- aip_wait_checkpoint <path> <expected> <message> <snapshot> [timeout] ----------
-# Parse only unambiguous two-state integer spellings. An empty result means reject.
+# Parse only unambiguous two-state integer spellings; an empty result means reject.
 proc _aip_wait_ckpt_accumulate_digits {digits base} {
     set number 0
     foreach digit [split [string tolower $digits] ""] {
@@ -296,8 +279,8 @@ proc _aip_wait_ckpt_save {path expected message snapshot} {
     return $snapshot
 }
 
-# 状态触发保存仍使用独立原生条件断点，不是后台watch。先拒绝保栈暂停
-# 期间的重入和活动watch，避免先装断点/打印成功、后在save处才失败。
+# 状态触发保存用独立的原生条件断点而非后台 watch；入口先拒绝保栈暂停重入和活动 watch，
+# 免得断点已装、提示已打印后才在 save 处失败。
 proc aip_wait_checkpoint {path expected message snapshot {timeout ""}} {
     if {[info commands _aip_inject_assert_quiescent] ne ""} { _aip_inject_assert_quiescent aip_wait_checkpoint }
     if {[info commands _aip_control_assert_idle] ne ""} {

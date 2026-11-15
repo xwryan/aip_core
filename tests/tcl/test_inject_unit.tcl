@@ -1,5 +1,4 @@
-# tests/tcl：注入API的纯Tcl协议/参数/生命周期单测，不冒充VCS仿真。
-# 本测试拥有mock寄存器及时间；真实FIFO、SVT、原生pause另由53回归覆盖。
+# 注入 API 的纯 Tcl 协议/参数/生命周期单测（mock 寄存器与时间）；真实 FIFO、SVT、原生 pause 由 VCS 回归覆盖。
 set root [file normalize [file join [file dirname [info script]] ../..]]
 source [file join $root src tcl aip_sim_control.tcl]
 source [file join $root src tcl aip_inject.tcl]
@@ -9,13 +8,12 @@ set now 0
 set forced 0
 array set registers {__inject_protocol_version 1 __inject_ack_id 0}
 
-# 所有断言失败抛错退出，runner不得把后面的PASS命令文本当执行结果。
 proc equal {name actual expected} {
     if {$actual ne $expected} { error "INJECT_UNIT_FAIL $name actual=<$actual> expected=<$expected>" }
     incr ::checks
 }
 
-# 验证错误分类，并保证参数拒绝不偷偷推进或force模型。
+# 参数拒绝不能偷偷推进或 force 模型。
 proc rejects {name body code} {
     set before $::forced
     equal "$name failure" [catch {uplevel 1 $body} result options] 1
@@ -29,7 +27,7 @@ proc get {path} {
     return $::registers($name)
 }
 
-# 记录模拟force，严格按生产的二态解析器解码，不执行任何真实仿真。
+# 记录模拟 force，按生产的二态解析器解码。
 proc force {path value} {
     incr ::forced
     regexp {^aip_core_pkg::(.+)$} $path -> name

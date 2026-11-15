@@ -1,8 +1,7 @@
-# tests/tcl：真实 UCLI 验证 Tcl 引用、单项/块写法及运行期覆盖的即时可见性。
-# 依赖配套 SV 和 src/tcl/aip_cmd.tcl；所有失败抛出 error，外层必须同时检查 Tcl/SV PASS。
+# 真实 UCLI 验证 Tcl 引用、单项/块写法及运行期覆盖的即时可见性；外层须同时检查 Tcl/SV PASS。
 source ../../src/tcl/aip_cmd.tcl
 
-# 只读取本条命令的结果，拒绝非零状态，防止上一次成功掩盖本次失败。
+# 拒绝非零状态，防止上一次成功掩盖本次失败。
 proc sp_read {kind} {
     aip_send_cmd "sp_sample kind=$kind"
     if {[aip_check_status] != 0} {error "SET_PARAM_TCL_READ_FAILED"}

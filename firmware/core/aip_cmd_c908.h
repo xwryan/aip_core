@@ -1,21 +1,8 @@
 #ifndef AIP_CMD_C908_H
 #define AIP_CMD_C908_H
 
-// ============================================================
-// aip_cmd_c908.h — C908 RISC-V interrupt setup reference
-//
-// PLIC_BASE and IRQ_NUM_MAILBOX must be defined by the
-// including project (e.g. aip_chip.h) before including
-// aip_cmd_c908.c.
-//
-// Usage:
-//   #include "aip_cmd_c908.h"
-//   cmd_irq_init();
-//
-// Or hook into existing ISR:
-//   #include "aip_cmd.h"
-//   cmd_irq_handler();  // call from your ISR
-// ============================================================
+// C908 interrupt setup reference: PLIC_BASE and IRQ_NUM_MAILBOX must be defined (e.g. in aip_chip.h)
+// before including aip_cmd_c908.c; alternatively call cmd_irq_handler() from an existing ISR.
 
 #define read_csr(reg) ({ \
     unsigned long __v; \
@@ -38,7 +25,7 @@
 #define MSTATUS_MIE     (1UL << 3)
 #define MIE_MEIE        (1UL << 11)
 
-// Initialize PLIC + global interrupts for mailbox (mtvec set by startup)
+// PLIC + global interrupts for the mailbox; mtvec is set by startup.
 void cmd_irq_init(void);
 
 #endif // AIP_CMD_C908_H

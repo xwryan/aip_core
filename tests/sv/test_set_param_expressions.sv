@@ -1,7 +1,4 @@
-// tests/sv：比较真实 plusarg 与 set_param 命令的类型化求值结果。
-// 依赖公开 aip_core_pkg；测试进程持有目标值和随机状态，框架持有 override。
-// 外部 runner 提供相同表达式，override 模式经命令安装，再逐 case 重置 RNG。
-// 不同来源必须输出相同抽样轨迹；固定 override 的历史 RNG 消耗另外验证。
+// 比较真实 plusarg 与 set_param 命令的类型化求值结果：不同来源须输出相同抽样轨迹（runner 提供相同表达式，逐 case 重置 RNG）。
 `include "aip_core_pkg.sv"
 
 // 使用公开宏而非内部 parser，覆盖来源选择、用户诊断位置与容器转发。
@@ -22,21 +19,19 @@ module test_set_param_expressions;
         `aip_field_enum(mode_t, mode, MODE0)
     `aip_struct_type_end(record_t)
 
-    // 每次调用都通过宏重新读取；path 用来让所有样例共享实际字段名 value。
+    // path 让所有样例共享实际字段名 value。
     function automatic int read_int(string	path);
         int				value;
         `aip_int(path, int, value, 7)
         return value;
     endfunction
 
-    // 实数路径不经过整数转换，保留完整随机样本精度。
     function automatic real read_real(string	path);
         real				value;
         `aip_real(path, value, 7.0)
         return value;
     endfunction
 
-    // 字符串列表由既有宏解释；raw getter 的原文行为在独立断言检查。
     function automatic string read_string(string	path);
         string				value;
         `aip_string(path, value, "default")
@@ -50,14 +45,14 @@ module test_set_param_expressions;
         return value;
     endfunction
 
-    // 枚举原来就共用来源；新增回归确保标量修改不改变这个契约。
+    // 回归：标量修改不能改变枚举共用来源的契约。
     function automatic mode_t read_enum(string	path);
         mode_t				value;
         `aip_enum(path, mode_t, value, MODE0)
         return value;
     endfunction
 
-    // 命令失败立即 fatal；避免把安装失败后的 plusarg 回退误判成 override 成功。
+    // 命令失败立即 fatal，避免把安装失败后的 plusarg 回退误判为 override 成功。
     task automatic command(string	text);
         int				status;
         string				result;
@@ -65,8 +60,8 @@ module test_set_param_expressions;
         if (status != 0) $fatal(1, "SET_PARAM_COMMAND_FAIL %s: %s", text, result);
     endtask
 
-    // 固定值的快速分流不能偷偷消耗随机数，否则已有发包 seed 会被无关配置读取扰动。
-    // 安装命令可创建进程，因此只在安装结束后抓取并比较当前读参进程的 RNG 状态。
+    // 固定值快速分流不能消耗随机数（否则已有 seed 会被无关读参扰动）；
+    // 安装命令可能创建进程，故安装结束后才抓取当前读参进程的 RNG 状态。
     task automatic check_literal_rng();
         process				owner;
         string				state_before;

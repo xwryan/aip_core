@@ -16,10 +16,8 @@ if [ ! -f "$dist_dir/lib/libaip_tcl_bridge.so" ]; then
     exit 1
 fi
 
-# -debug_access+r: the bridge reads SV state with UCLI `get` (command table,
-# status/result).  Deliberately without +f so the test covers the stricter
-# UCLI behavior (`run` returns with Tcl code `return` after the bridge's
-# $stop, ending the sourced file), which the aip_run.tcl split exists for.
+# -debug_access+r only: the bridge reads SV state with UCLI `get`; without +f, `run` returns with Tcl code
+# `return` after the bridge's $stop (ending the sourced file), which is what the aip_run.tcl split handles.
 # Real testbenches build with -debug_access+r+w+f (aip_send_cmd uses `force`).
 vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps \
     -full64 -lca -debug_access+r \

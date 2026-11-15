@@ -1,9 +1,4 @@
-//===========================================================
-// aip_mem_ecc.sv — ECC/Parity 后门 mem 读写 (SV 实现)
-// 跟 aip_ucli_utils.tcl 的 mem_cfg / mem_write / mem_read 等价
-// 复用 aip_cpu_bridge.sv 的 aip_mem_accessor 抽象 backdoor (32-bit word)
-// 依赖: aip_log, aip_cpu_bridge (aip_mem_accessor 定义)
-//===========================================================
+// ECC/Parity 后门 mem 读写（SV 实现，与 aip_ucli_utils.tcl 的 mem_cfg/mem_write/mem_read 等价），基于 aip_mem_accessor（32-bit word）。
 `ifndef AIP_MEM_ECC_SV
 `define AIP_MEM_ECC_SV
 
@@ -23,7 +18,6 @@ class aip_mem_ecc;
 
     static cfg_t cfgs[string];
 
-    // ============ ECC primitives ============
     static function bit xor_bits(input longint unsigned val, input int width);
         bit x = 0;
         for (int i = 0; i < width; i++) x ^= (val >> i) & 1;
@@ -159,8 +153,7 @@ class aip_mem_ecc;
         end
         return crc;
     endfunction
-    // ============ Config ============
-    // 注: 函数名避开 SV 关键字 `config` (config block)
+    // 函数名避开 SV 关键字 config（config block）。
     static function void set_cfg(input string path,
                                  input aip_mem_accessor accessor,
                                  input int width = 32,
@@ -204,7 +197,6 @@ class aip_mem_ecc;
         end
     endfunction
 
-    // ============ ECC encode/decode dispatcher ============
     static function longint unsigned ecc_encode(input cfg_t c, input longint unsigned data);
         case (c.ecc_mode)
             "none":   return 0;
@@ -239,7 +231,6 @@ class aip_mem_ecc;
         endcase
     endtask
 
-    // ============ Public write_word / read_word / check ============
     static task write_word(input string path, input longint unsigned addr, input longint unsigned data);
         cfg_t c;
         longint unsigned ecc, stored, data_masked, data_mask;
@@ -332,7 +323,6 @@ class aip_mem_ecc;
         ecc_decode(c, raw_data, raw_ecc, corrected, status);
     endtask
 
-    // ============ Fault injection ============
     static task inject_err(input string path, input longint unsigned addr, input int bit_pos);
         cfg_t c;
         int unsigned tmp;
@@ -361,7 +351,6 @@ class aip_mem_ecc;
         `aip_info(("aip_mem_ecc::inject_err: %s[0x%0h] bit %0d flipped", path, addr, bit_pos));
     endtask
 
-    // ============ Block ops ============
     static task write_zero(input string path, input longint unsigned addr, input int count);
         for (int i = 0; i < count; i++) write_word(path, addr + i, 0);
     endtask
@@ -370,7 +359,6 @@ class aip_mem_ecc;
         for (int i = 0; i < count; i++) write_word(path, addr + i, start + i);
     endtask
 
-    // ============ Scrub ============
     static task scrub(input  string path,
                       input  longint unsigned addr_from,
                       input  longint unsigned addr_to,
@@ -407,7 +395,7 @@ class aip_mem_ecc;
                   path, addr_from, addr_to, ok, single, double_err, other, do_fix));
     endtask
 
-    // ============ Config introspection (跟 tcl mem_cfg_list / mem_cfg_get 对齐) ============
+    // 与 Tcl mem_cfg_list/mem_cfg_get 对齐。
     static function void cfg_list();
         string keys[$];
         cfg_t  c;
@@ -445,7 +433,7 @@ class aip_mem_ecc;
         return 1;
     endfunction
 
-    // ============ Block ops (跟 tcl mem_write_block / mem_read_block / mem_write_random 对齐) ============
+    // 与 Tcl mem_write_block/mem_read_block/mem_write_random 对齐。
     static task write_block(input string path,
                             input longint unsigned addr,
                             input longint unsigned data[$]);
@@ -501,18 +489,10 @@ class aip_mem_ecc;
 
 endclass
 
-//===========================================================
-// ============ RAL-Integrated Layer ============
-// 新一层 backdoor 接 UVM RAL (uvm_reg / uvm_mem)。
-// Codec 算法直接复用 aip_mem_ecc 的 static primitives。
-// Accessor 子类家族负责异型拼装 (hdl/split/banked/sliced/scrambled),
-// 用户使用 RAL 时调 `mem.read/write(.path(UVM_BACKDOOR))` 即可,
-// 完全无感拼装。
-//===========================================================
+// RAL 集成层：uvm_reg/uvm_mem 的 backdoor，codec 复用上面的 static primitives；accessor 子类负责异型拼装
+// （hdl/split/banked/sliced/scrambled），用户只需 mem.read/write(.path(UVM_BACKDOOR))。
 
-//-----------------------------------------------------------
-// aip_mem_phy_accessor — 抽象物理 accessor (longint, width-aware)
-//-----------------------------------------------------------
+// 抽象物理 accessor（longint，按位宽）。
 virtual class aip_mem_phy_accessor;
     string view = "RTL";
     pure virtual task wr(input  longint unsigned addr,
@@ -523,10 +503,7 @@ virtual class aip_mem_phy_accessor;
                         input  int              width);
 endclass
 
-//-----------------------------------------------------------
-// aip_mem_acc_hdl — uvm_hdl_deposit / uvm_hdl_read
-//   path 形式: "tb.dut.ram_array" (索引由 accessor 加)
-//-----------------------------------------------------------
+// uvm_hdl_deposit/uvm_hdl_read；path 形如 tb.dut.ram_array（索引由 accessor 添加）。
 class aip_mem_acc_hdl extends aip_mem_phy_accessor;
     string path;
     function new(string p); path = p; endfunction
@@ -542,12 +519,7 @@ class aip_mem_acc_hdl extends aip_mem_phy_accessor;
     endtask
 endclass
 
-//-----------------------------------------------------------
-// aip_mem_acc_split — data + ecc 分两块 accessor
-//   存储模型: 输入的 stored = (ecc << data_width) | data
-//   wr: 拆开分别写 data_acc / ecc_acc
-//   rd: 两路读, 重新拼回
-//-----------------------------------------------------------
+// data + ecc 分两块存储：stored = (ecc << data_width) | data，写时拆开分别写 data_acc/ecc_acc，读时两路拼回。
 class aip_mem_acc_split extends aip_mem_phy_accessor;
     aip_mem_phy_accessor data_acc;
     aip_mem_phy_accessor ecc_acc;
@@ -570,10 +542,7 @@ class aip_mem_acc_split extends aip_mem_phy_accessor;
     endtask
 endclass
 
-//-----------------------------------------------------------
-// aip_mem_acc_banked — 多 bank 交织
-//   bank_id = addr % N, bank_addr = addr / N
-//-----------------------------------------------------------
+// 多 bank 交织：bank_id = addr % N，bank_addr = addr / N。
 class aip_mem_acc_banked extends aip_mem_phy_accessor;
     aip_mem_phy_accessor banks[$];
     virtual task wr(input longint unsigned addr, input longint unsigned data, input int width);
@@ -592,9 +561,7 @@ class aip_mem_acc_banked extends aip_mem_phy_accessor;
     endtask
 endclass
 
-//-----------------------------------------------------------
-// aip_mem_acc_scrambled — addr/data XOR key
-//-----------------------------------------------------------
+// addr/data 与 key 异或（scrambled）。
 class aip_mem_acc_scrambled extends aip_mem_phy_accessor;
     aip_mem_phy_accessor inner;
     longint unsigned addr_key = 0;
@@ -609,10 +576,7 @@ class aip_mem_acc_scrambled extends aip_mem_phy_accessor;
     endtask
 endclass
 
-//-----------------------------------------------------------
-// aip_mem_acc_sliced — 逻辑 word 由多个 RTL 信号 slice 拼成
-//   slice: {path, offset, size}
-//-----------------------------------------------------------
+// 逻辑 word 由多个 RTL 信号 slice {path, offset, size} 拼成。
 class aip_mem_acc_sliced extends aip_mem_phy_accessor;
     typedef struct { string path; int offset; int size; } slice_t;
     slice_t slices[$];
@@ -645,11 +609,7 @@ class aip_mem_acc_sliced extends aip_mem_phy_accessor;
     endtask
 endclass
 
-//-----------------------------------------------------------
-// aip_mem_ecc_backdoor — UVM RAL backdoor
-//   持有 codec 配置 + accessor 实例
-//   read/write 自动 ECC 编解码
-//-----------------------------------------------------------
+// UVM RAL backdoor：持有 codec 配置与 accessor，read/write 自动 ECC 编解码。
 class aip_mem_ecc_backdoor extends uvm_reg_backdoor;
 
     typedef struct {
@@ -664,7 +624,7 @@ class aip_mem_ecc_backdoor extends uvm_reg_backdoor;
     string               on_err = "warn";
     int                  ecc_width = 0;
 
-    // 错误统计 (累积)
+    // 累积错误统计
     int err_single  = 0;
     int err_double  = 0;
     int err_parity  = 0;
@@ -833,9 +793,7 @@ class aip_mem_ecc_backdoor extends uvm_reg_backdoor;
 
 endclass
 
-//-----------------------------------------------------------
-// aip_mem_ecc_factory — 工厂便利接口
-//-----------------------------------------------------------
+// 工厂便利接口。
 class aip_mem_ecc_factory;
 
     static function aip_mem_ecc_backdoor attach_concat(

@@ -1,5 +1,4 @@
-// tests/sv/test_str_delim.sv — whitespace/comma delimiter handling must use byte
-// literals: on VCS Q-2020 `s[i] == "\t"` matches the letter 't' (see MEMORY).
+// Delimiter handling must use byte literals: on VCS Q-2020 `s[i] == "\t"` matches the letter 't'.
 `include "aip_core_pkg.sv"
 
 module test_str_delim;

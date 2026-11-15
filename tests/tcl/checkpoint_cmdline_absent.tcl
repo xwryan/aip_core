@@ -1,5 +1,4 @@
-# tests/tcl：缺省 CLI 进程恢复 A，旧专属键/数组必须消失，已有 override 保持至显式 clear。
-# 只读取旧 base，不修改其文件，也不重新保存快照。
+# 缺省 CLI 进程恢复 A：旧专属键/数组必须消失，已有 override 保持到显式 clear。
 source [file join $::env(AIP_CORE) tests tcl checkpoint_cmdline_common.tcl]
 run 10ns
 ckpr_sample N N singleton -4

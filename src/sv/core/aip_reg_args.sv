@@ -1,9 +1,6 @@
-// src/sv/core：aip_cmd_reg/creg 共用的寄存器参数解析；由 aip_cmd.sv 包含。
-// 依赖 aip_str 的宽整数解析，不启动 sequence、不改变命令注册或 Tcl 调度。
-// 每次 launch 创建独立对象，字段/错误文本只属于本次访问；解析失败不得发总线请求。
-// 同时支持 key=value 和位置 op addr len data [mask]；读位置格式为 op addr [len]。
-// len 默认 4，mask 默认 0（PCIe 接入约定 1=屏蔽字节），框架只原样传递其值。
-// check_read_data 是可选逐次读比较策略，默认1且仅接受0/1；实际支持由注册宏的可选映射声明。
+// aip_cmd_reg/creg 共用的寄存器参数解析：每次 launch 新建对象，解析失败不得发总线请求。
+// 支持 key=value 与位置格式 op addr len data [mask]（读为 op addr [len]）；len 默认 4，mask 默认 0（PCIe 约定 1=屏蔽字节，框架原样传递）。
+// check_read_data 是可选逐次读比较策略（默认 1，仅接受 0/1），是否支持由注册宏的可选映射声明。
 class aip_reg_args;
     bit	                is_write;
     longint unsigned	  addr;
@@ -14,7 +11,7 @@ class aip_reg_args;
     bit	                check_read_data;
     bit	                check_read_data_present;
 
-    // 统一记录可回传的参数错误；不使用 fatal，使 Tcl 可修正参数后继续运行。
+    // 只记录可回传的错误、不 fatal，使 Tcl 可修正参数后继续。
     function bit reject(string reason);
         error_msg = reason;
         return 0;
@@ -37,9 +34,8 @@ class aip_reg_args;
         return 1;
     endfunction
 
-    // 解析一次命令；data_bits 来自注册 sequence 类型的 wdata 位宽，兼容旧 64 位类。
-    // 位置参数可附加 mask=/check_read_data=，禁止混用 op=/addr=/len=/data=，避免参数错位。
-    // 命名格式保留历史 data 缺省 0；位置 write 必须明确给出四个值。
+    // data_bits 来自注册 sequence 的 wdata 位宽（兼容旧 64 位类）。位置参数可附加 mask=/check_read_data=，
+    // 但禁止混用 op=/addr=/len=/data=；命名格式 data 缺省 0，位置 write 必须给出四个值。
     function bit parse(string args, int data_bits = 128);
         string_darray_t	  tokens;
         string	            positional[$];
@@ -60,7 +56,7 @@ class aip_reg_args;
         check_read_data_present = 0;
         if (data_bits < 1 || data_bits > 128)
             return reject("sequence wdata width must be 1..128 bits");
-        // 历史 get_arg 接受逗号分隔；寄存器参数均为标量，不包含结构体或列表。
+        // 与 get_arg 一样接受逗号分隔（寄存器参数均为标量）。
         tokens = aip_str::split(aip_str::replace(args, ",", " "));
         foreach (tokens[i]) begin
             equals = aip_str::str_find(tokens[i], "=");

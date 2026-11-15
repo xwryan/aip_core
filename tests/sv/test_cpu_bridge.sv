@@ -1,21 +1,6 @@
-//===========================================================
-// test_cpu_bridge.sv — CPU Bridge 功能测试
-//
-// 用纯 SV 模拟 C908 CPU 行为：
-//   1. 内存数组模拟 mailbox 区域
-//   2. "fake_cpu" 进程模拟 C 固件 poll-dispatch-respond
-//   3. 通过 aip_cmd::exec() 发命令，验证结果
-//
-// 编译:
-//   vcs -sverilog -ntb_opts uvm +incdir+.. -timescale=1ns/1ps test_cpu_bridge.sv -debug_access+all
-// 运行:
-//   ./simv
-//===========================================================
+// CPU Bridge 功能测试：纯 SV 模拟 C908 固件的 mailbox poll-dispatch-respond，经 aip_cmd::exec() 发命令并校验结果。
 `include "aip_core_pkg.sv"
 
-// ============================================================
-// 模拟内存 — 当作 CPU 的 RAM/Mailbox 区域
-// ============================================================
 module fake_ram;
     reg [31:0] mem [0:1023];  // 4KB, 1024 x 32-bit words
 
@@ -24,9 +9,6 @@ module fake_ram;
     end
 endmodule
 
-// ============================================================
-// Memory accessor — 通过 hdl path 访问 fake_ram
-// ============================================================
 class sim_mem extends aip_mem_accessor;
     virtual task wr_mem(input longint unsigned addr, input int unsigned data);
         if (addr >= 64'h4000_0000 && addr < 64'h4000_0400) begin
@@ -47,9 +29,7 @@ class sim_mem extends aip_mem_accessor;
     endtask
 endclass
 
-// ============================================================
-// 注册 CPU 命令（SV 侧声明，"C 侧" 执行）
-// ============================================================
+// CPU 命令：SV 侧声明，“C 侧”（fake CPU）执行。
 `aip_cmd_cpu(cpu_read)
 `aip_cmd_cpu(cpu_write)
 `aip_cmd_cpu(cpu_hello)
@@ -66,18 +46,13 @@ class sv_ops;
 endclass
 `aip_cmd_task(sv_hello, sv_ops::sv_hello)
 
-// ============================================================
-// Testbench
-// ============================================================
 module tb;
-    // 时钟
     `aip_clk_create(clk0, 100e6)
 
     // 事件监控: rsp_flag 变化时触发 __cpu_bridge_rsp_event
     // ram.mem[130] = rsp_flag (offset 0x208, base_idx=0)
     `aip_cpu_bridge_monitor(tb.ram.mem, 0)
 
-    // fake RAM 实例（mailbox 区域）
     fake_ram ram();
 
     // Fake CLINT MSIP0 寄存器 (MSIP 唤醒测试用). hdl 路径 = tb.fake_msip
@@ -86,19 +61,14 @@ module tb;
     // Fake PLIC_IP word (src48 → bit16). hdl 路径 = tb.fake_plic_ip
     reg [31:0] fake_plic_ip = 0;
 
-    // 模拟 CPU 地址空间（用于 cpu_read32/write32 测试）
     reg [31:0] cpu_mem [0:255];  // 1KB CPU 地址空间，基地址 0x4000_0000
     initial begin
         for (int i = 0; i < 256; i++) cpu_mem[i] = 0;
-        // 预填一些值供 read 测试
         cpu_mem[0] = 32'h12345678;
         cpu_mem[1] = 32'hDEADBEEF;
     end
 
-    // ============================================================
-    // Fake CPU 进程 — 模拟 C 固件的 cmd_loop()
-    // 轮询 cmd_flag，解析命令，写回结果
-    // ============================================================
+    // 模拟 C 固件 cmd_loop()：轮询 cmd_flag，解析命令，写回结果。
     task automatic fake_cpu_loop();
         int unsigned cmd_flag;
         int unsigned cmd_len;
@@ -124,7 +94,6 @@ module tb;
                 continue;
             end
 
-            // 读取命令
             cmd_len = ram.mem[1];  // offset 0x004 -> word index 1
             cmd_str = "";
             for (int i = 0; i < int'(cmd_len) && i < 512; i++) begin
@@ -140,7 +109,6 @@ module tb;
             // 立即清 cmd_flag，防止重复处理
             ram.mem[0] = 0;
 
-            // 解析命令名（第一个空格前）
             begin
                 int sp;
                 sp = aip_str::str_find(cmd_str, " ");
@@ -153,10 +121,9 @@ module tb;
                 end
             end
 
-            // 模拟命令执行 + 延迟（模拟 CPU 执行时间）
+            // 模拟 CPU 执行时间
             #50;
 
-            // 分发
             if (cmd_name == "cpu_read") begin
                 int addr;
                 string addr_s;
@@ -280,7 +247,7 @@ module tb;
                         write_response($sformatf("ok data=0x%08h iter=%0d", rdata, i), 0);
                         break;
                     end
-                    #1;  // 每次 poll 间隔
+                    #1;
                 end
                 if (i == timeout_val) begin
                     write_response($sformatf("timeout data=0x%08h iter=%0d", rdata, timeout_val), 1);
@@ -295,7 +262,6 @@ module tb;
         end
     endtask
 
-    // 写回响应到 mailbox
     task automatic write_response(string rsp, int status);
         int len;
         len = rsp.len();
@@ -313,11 +279,7 @@ module tb;
         ram.mem[130] = 1;
     endtask
 
-    // ============================================================
-    // Fake CPU 进程 — 中断驱动模式
-    // 用 @(posedge aip_core_pkg::__cpu_bridge_irq) 替代 #10 忙等
-    // 模拟真实 C 固件的 WFI + ISR 行为
-    // ============================================================
+    // 中断驱动模式：用 @(posedge __cpu_bridge_irq) 代替忙等，模拟固件的 WFI + ISR。
     task automatic fake_cpu_irq_loop();
         int unsigned cmd_flag;
         int unsigned cmd_len;
@@ -336,21 +298,18 @@ module tb;
             // 模拟 C ISR 进入后写 irq_ack；bridge monitor 随后清 ACK 和 IRQ。
             ram.mem[264] = 1;  // OFF_IRQ_ACK = 0x420, word index 264
 
-            // 检查 exit_flag
             if (ram.mem[262] == 1) begin
                 `aip_info(("[FAKE_CPU_IRQ] Exit requested by SV, stopping"));
                 ram.mem[262] = 0;
                 return;
             end
 
-            // 检查 cmd_flag
             cmd_flag = ram.mem[0];
             if (cmd_flag != 1) begin
                 `aip_warning(("[FAKE_CPU_IRQ] Spurious IRQ, cmd_flag=%0d", cmd_flag));
                 continue;
             end
 
-            // 读取命令
             cmd_len = ram.mem[1];
             cmd_str = "";
             for (int i = 0; i < int'(cmd_len) && i < 512; i++) begin
@@ -362,10 +321,8 @@ module tb;
 
             `aip_info(("[FAKE_CPU_IRQ] IRQ received, cmd: '%s' async=%0d", cmd_str, async_flag));
 
-            // 立即清 cmd_flag
             ram.mem[0] = 0;
 
-            // 解析命令名
             begin
                 int sp;
                 sp = aip_str::str_find(cmd_str, " ");
@@ -381,7 +338,6 @@ module tb;
             // 模拟 CPU 执行时间
             #30;
 
-            // 分发（复用同样的命令逻辑）
             if (cmd_name == "cpu_read") begin
                 int addr;
                 string addr_s;
@@ -418,7 +374,7 @@ module tb;
                 ch = ram.mem[2 + i];
                 cmd_str = {cmd_str, string'(ch[7:0])};
             end
-            ram.mem[0] = 0;                         // 清 cmd_flag
+            ram.mem[0] = 0;
             write_response("msip_ok", 0);           // 简化: 任何命令都回 msip_ok
         end
     endtask
@@ -438,9 +394,6 @@ module tb;
         end
     endtask
 
-    // ============================================================
-    // 主测试流程
-    // ============================================================
     initial begin
         sim_mem mem_acc;
         int pass_count;
@@ -449,18 +402,15 @@ module tb;
         pass_count = 0;
         fail_count = 0;
 
-        // 初始化 CPU bridge
         mem_acc = new();
         aip_cpu_bridge::init(mem_acc, 64'h0);  // base=0, 直接映射到 fake_ram
 
-        // 启动 fake CPU 进程
         fork
             fake_cpu_loop();
         join_none
 
         #100;  // 等待系统稳定
 
-        // ---- Test 1: 同步 CPU 命令 — cpu_hello ----
         $display("\n========== Test 1: Sync CPU command — cpu_hello ==========");
         aip_cmd::exec("cpu_hello", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0 &&
@@ -476,7 +426,6 @@ module tb;
 
         #50;
 
-        // ---- Test 2: 同步 CPU 命令 — cpu_read ----
         $display("\n========== Test 2: Sync CPU command — cpu_read ==========");
         aip_cmd::exec("cpu_read addr=0x100", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0 &&
@@ -492,7 +441,6 @@ module tb;
 
         #50;
 
-        // ---- Test 3: 同步 CPU 命令 — cpu_write ----
         $display("\n========== Test 3: Sync CPU command — cpu_write ==========");
         aip_cmd::exec("cpu_write addr=0x200 data=0xCAFE", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0 &&
@@ -508,7 +456,6 @@ module tb;
 
         #50;
 
-        // ---- Test 4: 异步 CPU 命令 ----
         $display("\n========== Test 4: Async CPU command — cpu_hello async=1 ==========");
         begin
             realtime t_start, t_end;
@@ -528,7 +475,6 @@ module tb;
 
         #200;  // 等 fake CPU 处理完异步命令
 
-        // ---- Test 5: SV 命令正常路由（不走 CPU） ----
         $display("\n========== Test 5: SV command — sv_hello (should NOT go to CPU) ==========");
         aip_cmd::exec("sv_hello", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0) begin
@@ -541,7 +487,6 @@ module tb;
 
         #50;
 
-        // ---- Test 6: 混合 fork — SV + CPU 并行 ----
         $display("\n========== Test 6: Mixed fork — sv_hello + cpu_read ==========");
         aip_cmd::exec("fork sv_hello, cpu_read addr=0x300 join", SRC_INTERNAL);
         $display("[PASS] Mixed fork completed at t=%0t", $time);
@@ -549,7 +494,6 @@ module tb;
 
         #50;
 
-        // ---- Test 7: CPU 慢命令 — 验证同步等待 ----
         $display("\n========== Test 7: Slow CPU command — cpu_slow ==========");
         begin
             realtime t_start, t_end;
@@ -568,7 +512,6 @@ module tb;
             end
         end
 
-        // ---- Test 8: 内建命令 cpu_read32 ----
         $display("\n========== Test 8: Built-in cpu_read32 ==========");
         aip_cmd::exec("cpu_read32 addr=0x40000000", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0 &&
@@ -584,14 +527,12 @@ module tb;
 
         #50;
 
-        // ---- Test 9: 内建命令 cpu_write32 + readback ----
         $display("\n========== Test 9: Built-in cpu_write32 + readback ==========");
         aip_cmd::exec("cpu_write32 addr=0x40000008 data=0xAABBCCDD", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0) begin
             $display("[INFO] cpu_write32 done: %s", aip_cmd::__aip_cmd_last_result);
         end
         #50;
-        // 读回验证
         aip_cmd::exec("cpu_read32 addr=0x40000008", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0 &&
             aip_str::str_find(aip_cmd::__aip_cmd_last_result, "aabbccdd") != -1) begin
@@ -606,7 +547,6 @@ module tb;
 
         #50;
 
-        // ---- Test 10: 内建命令 cpu_read64 ----
         $display("\n========== Test 10: Built-in cpu_read64 ==========");
         // cpu_mem[0]=0x12345678, cpu_mem[1]=0xDEADBEEF → 64-bit: 0xDEADBEEF_12345678
         aip_cmd::exec("cpu_read64 addr=0x40000000", SRC_INTERNAL);
@@ -621,7 +561,6 @@ module tb;
 
         #50;
 
-        // ---- Test 11: cpu_write32_swap — 字节倒序写入 ----
         $display("\n========== Test 11: cpu_write32_swap + readback ==========");
         aip_cmd::exec("cpu_write32_swap addr=0x4000000C data=0x80102030", SRC_INTERNAL);
         $display("[INFO] write32_swap: %s", aip_cmd::__aip_cmd_last_result);
@@ -639,7 +578,6 @@ module tb;
 
         #50;
 
-        // ---- Test 12: cpu_read32_swap — 字节倒序读取 ----
         $display("\n========== Test 12: cpu_read32_swap ==========");
         // cpu_mem[0] = 0x12345678, swap 后应为 0x78563412
         aip_cmd::exec("cpu_read32_swap addr=0x40000000", SRC_INTERNAL);
@@ -654,7 +592,6 @@ module tb;
 
         #50;
 
-        // ---- Test 13: cpu_poll32 — 轮询成功 ----
         $display("\n========== Test 13: cpu_poll32 — immediate match ==========");
         // cpu_mem[0] = 0x12345678, poll mask=0xFF expect=0x78 应立即匹配
         aip_cmd::exec("cpu_poll32 addr=0x40000000 mask=0xFF expect=0x78 timeout=100", SRC_INTERNAL);
@@ -669,7 +606,6 @@ module tb;
 
         #50;
 
-        // ---- Test 14: cpu_poll32 — 超时 ----
         $display("\n========== Test 14: cpu_poll32 — timeout ==========");
         // poll expect=0xFF but actual low byte is 0x78, should timeout
         aip_cmd::exec("cpu_poll32 addr=0x40000000 mask=0xFF expect=0xFF timeout=10", SRC_INTERNAL);
@@ -683,11 +619,9 @@ module tb;
 
         #50;
 
-        // ---- Test 15: cpu_memset — SV 后门批量填充 ----
         $display("\n========== Test 15: cpu_memset (SV backdoor) ==========");
         aip_cmd::exec("cpu_memset addr=0x40000100 len=32 val=0xCAFEBABE", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0) begin
-            // 验证 cpu_mem 是否被后门写入
             // addr 0x40000100 → cpu_mem idx = (0x100)/4 = 64
             if (cpu_mem[64] == 32'hCAFEBABE && cpu_mem[65] == 32'hCAFEBABE) begin
                 $display("[PASS] cpu_memset: verified cpu_mem[64]=0x%08h cpu_mem[65]=0x%08h",
@@ -706,7 +640,6 @@ module tb;
 
         #50;
 
-        // ---- Test 16: cpu_memdump — SV 后门内存 dump ----
         $display("\n========== Test 16: cpu_memdump (SV backdoor) ==========");
         aip_cmd::exec("cpu_memdump addr=0x40000000 len=32", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0) begin
@@ -719,32 +652,24 @@ module tb;
 
         #50;
 
-        // ============================================================
-        // Phase 2: IRQ 模式测试
-        // 停止 polling CPU，启动 IRQ CPU，开启 IRQ
-        // ============================================================
         $display("\n\n============ Phase 2: IRQ Mode Tests ============\n");
 
-        // 停止 polling fake CPU (disable fork)，启动 IRQ fake CPU
+        // disable fork 停掉 polling fake CPU
         disable fork;
         #50;
 
-        // 清空 mailbox
         ram.mem[0] = 0;    // cmd_flag
         ram.mem[130] = 0;  // rsp_flag
 
-        // 启用 IRQ 模式
         aip_cpu_bridge::enable_irq();
         aip_cpu_bridge::start_monitors();
 
-        // 启动 IRQ 驱动的 fake CPU
         fork
             fake_cpu_irq_loop();
         join_none
 
         #50;
 
-        // ---- Test 17: IRQ 模式同步命令 — cpu_hello ----
         $display("\n========== Test 17: IRQ mode — cpu_hello ==========");
         aip_cmd::exec("cpu_hello", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0 &&
@@ -760,7 +685,6 @@ module tb;
 
         #50;
 
-        // ---- Test 18: IRQ 模式同步 — cpu_read ----
         $display("\n========== Test 18: IRQ mode — cpu_read ==========");
         aip_cmd::exec("cpu_read addr=0x400", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0 &&
@@ -776,7 +700,6 @@ module tb;
 
         #50;
 
-        // ---- Test 19: IRQ 模式异步 ----
         $display("\n========== Test 19: IRQ mode async — cpu_hello async=1 ==========");
         aip_cmd::exec("cpu_hello async=1", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0) begin
@@ -791,11 +714,10 @@ module tb;
 
         #200;
 
-        // ---- Test 20: cpu_exit — SV 通知 C 退出 ----
         $display("\n========== Test 20: cpu_exit — SV requests CPU exit ==========");
         aip_cmd::exec("cpu_exit", SRC_INTERNAL);
         #100;  // 等 IRQ fake CPU 收到退出信号
-        // 验证: exit_flag 应该被 ACK 清零
+        // exit_flag 应已被 ACK 清零
         if (ram.mem[262] == 0) begin
             $display("[PASS] cpu_exit: IRQ CPU exited, exit_flag cleared");
             pass_count++;
@@ -806,7 +728,6 @@ module tb;
 
         #50;
 
-        // ---- Test 21: C 侧 cmd_exit — 模拟 C 主动异常退出 ----
         $display("\n========== Test 21: C-side cmd_exit simulation ==========");
         // 模拟 C 侧写 exit_flag=2, exit_code=1 (异常)
         ram.mem[262] = 2;   // exit_flag = 2 (C requests exit)
@@ -823,19 +744,13 @@ module tb;
             end
         end
 
-        // ============================================================
-        // Phase 3: Event-Driven 模式测试
-        // 用 @(__cpu_bridge_rsp_event) 替代 #10 轮询
-        // ============================================================
         $display("\n\n============ Phase 3: Event-Driven Mode Tests ============\n");
 
         // 重新启动 polling fake CPU（Phase 2 的 disable fork 已停掉）
-        // 清 mailbox
         ram.mem[0] = 0;    // cmd_flag
         ram.mem[130] = 0;  // rsp_flag
         ram.mem[262] = 0;  // exit_flag
 
-        // 启用事件模式
         aip_cpu_bridge::enable_event_mode();
 
         fork
@@ -843,7 +758,6 @@ module tb;
         join_none
         #50;
 
-        // ---- Test 22: 事件模式同步命令 ----
         $display("\n========== Test 22: Event mode — cpu_hello ==========");
         aip_cmd::exec("cpu_hello", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0 &&
@@ -858,7 +772,6 @@ module tb;
 
         #50;
 
-        // ---- Test 23: 事件模式 cpu_read32 ----
         $display("\n========== Test 23: Event mode — cpu_read32 ==========");
         aip_cmd::exec("cpu_read32 addr=0x40000000", SRC_INTERNAL);
         if (aip_cmd::__aip_cmd_last_status == 0 &&
@@ -873,7 +786,6 @@ module tb;
 
         #50;
 
-        // ---- Test 24: 事件模式 cpu_write32 + readback ----
         $display("\n========== Test 24: Event mode — cpu_write32 + readback ==========");
         aip_cmd::exec("cpu_write32 addr=0x40000010 data=0xEVENT001", SRC_INTERNAL);
         #50;
@@ -890,7 +802,7 @@ module tb;
         disable fork;
         #50;
 
-        // ---- Test 24b: 事件模式, exit_flag=2 已预置 → 立即报 CPU exited, 不等超时 ----
+        // 期望立即报 CPU exited，而不是等超时。
         $display("\n========== Test 24b: Event mode — exit_flag=2 pre-set ==========");
         begin
             int st; string res; real t0; real saved_to;
@@ -914,7 +826,7 @@ module tb;
 
         #50;
 
-        // ---- Test 24c: 事件模式, 命令进行中 C 置 exit_flag=2 (不动 rsp_flag) → 需被唤醒 ----
+        // C 在命令进行中置 exit_flag=2（不动 rsp_flag），等待方须被唤醒。
         $display("\n========== Test 24c: Event mode — exit_flag=2 raised mid-command ==========");
         begin
             int st; string res; real t0; real saved_to;
@@ -944,14 +856,13 @@ module tb;
 
         #50;
 
-        // ========== Test 25: MSIP 唤醒 ==========
         $display("\n========== Test 25: MSIP wake ==========");
         begin
             int st; string res;
             aip_cpu_bridge::event_mode = 0;                   // 本测试用轮询，非事件驱动
             aip_cpu_bridge::irq_enabled = 0;   // 前序 IRQ 测试遗留; MSIP 测试只用 MSIP
-            aip_cpu_bridge::set_msip_path("tb.fake_msip");   // 启用 MSIP 模式
-            fork fake_cpu_msip_loop(); join_none              // 启 MSIP fake cpu
+            aip_cpu_bridge::set_msip_path("tb.fake_msip");
+            fork fake_cpu_msip_loop(); join_none
             #10;
             aip_cpu_bridge::send_cmd("cpu_ping", 0, st, res); // 应 deposit fake_msip=1 → 醒
             if (st == 0 && res == "msip_ok") begin
@@ -966,7 +877,6 @@ module tb;
         disable fork;
         #50;
 
-        // ========== Test 26: PLIC 唤醒 ==========
         $display("\n========== Test 26: PLIC wake ==========");
         begin
             int st; string res;
@@ -990,7 +900,7 @@ module tb;
         disable fork;
         #50;
 
-        // ---- Test 27: mailbox 布局 — cmd_data (一字符一 word) 不得越过 rsp_flag ----
+        // cmd_data（一字符一 word）不得越过 rsp_flag。
         $display("\n========== Test 27: mailbox layout ==========");
         if (aip_cpu_bridge::OFF_CMD_DATA + aip_cpu_bridge::CMD_DATA_MAX * 4 <= aip_cpu_bridge::OFF_RSP_FLAG &&
             aip_cpu_bridge::OFF_RSP_DATA + aip_cpu_bridge::CMD_DATA_MAX * 4 <= aip_cpu_bridge::OFF_ASYNC_FLAG) begin
@@ -1001,7 +911,6 @@ module tb;
             fail_count++;
         end
 
-        // ---- Summary ----
         #100;
         $display("\n==========================================================");
         $display("  CPU Bridge Test Summary");

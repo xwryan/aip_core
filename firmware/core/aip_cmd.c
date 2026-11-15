@@ -1,9 +1,5 @@
 #include "aip_cmd.h"
 
-// ============================================================
-// Internal state
-// ============================================================
-
 static aip_mailbox_t *g_mailbox = 0;
 static cmd_entry_t    g_cmds[AIP_CMD_MAX];
 static int            g_cmd_count = 0;
@@ -13,12 +9,7 @@ static char g_cmd_buf[AIP_CMD_DATA_MAX + 1];
 static char g_rsp_buf[AIP_CMD_DATA_MAX + 1];
 static char g_val_buf[AIP_CMD_DATA_MAX + 1];
 
-// ============================================================
-// WFI — wait for interrupt (RISC-V)
-// In IRQ builds (AIP_USE_IRQ defined), real wfi halts the CPU until
-// any interrupt. In poll-mode builds, downgrade to nop so cmd_loop
-// busy-polls cmd_flag without halting (no IRQ source to wake wfi).
-// ============================================================
+// Poll-mode builds downgrade wfi to nop: no IRQ source could wake it, so cmd_loop busy-polls cmd_flag.
 static inline void wfi(void) {
 #if defined(__riscv) && (defined(AIP_USE_IRQ) || defined(AIP_USE_MSIP))
     __asm__ volatile("wfi");
@@ -26,10 +17,6 @@ static inline void wfi(void) {
     __asm__ volatile("nop");
 #endif
 }
-
-// ============================================================
-// Public API
-// ============================================================
 
 void cmd_init(volatile void *mailbox_base) {
     g_mailbox = (aip_mailbox_t *)mailbox_base;
@@ -46,10 +33,6 @@ void cmd_register(const char *name, cmd_handler_t handler) {
     g_cmds[g_cmd_count].handler = handler;
     g_cmd_count++;
 }
-
-// ============================================================
-// Argument parsing
-// ============================================================
 
 static int parse_int(const char *s) {
     int val = 0;
@@ -143,11 +126,6 @@ const char *cmd_get_str(const char *args, const char *key, const char *def) {
     return g_val_buf;
 }
 
-// ============================================================
-// Response
-// ============================================================
-
-// Write a plain string response to mailbox
 static void cmd_return_raw(const char *s, int len) {
     int i;
     if (!g_mailbox) return;
@@ -160,7 +138,7 @@ static void cmd_return_raw(const char *s, int len) {
     g_mailbox->rsp_flag = 1;
 }
 
-// Minimal hex formatter (no libc)
+// Minimal hex/decimal formatters (no libc in firmware).
 static int fmt_hex(char *buf, unsigned int val, int width) {
     static const char hex[] = "0123456789abcdef";
     int i, len = 0;
@@ -172,7 +150,6 @@ static int fmt_hex(char *buf, unsigned int val, int width) {
     return len;
 }
 
-// Minimal decimal formatter (no libc)
 static int fmt_int(char *buf, int val) {
     int i, len = 0, neg = 0;
     char tmp[16];
@@ -185,7 +162,7 @@ static int fmt_int(char *buf, int val) {
     return len;
 }
 
-// Simple formatted response: supports %x, %08x, %d, %s (no libc needed)
+// Supports only %x, %08x, %d, %s (no libc).
 void cmd_return(const char *fmt, ...) {
     va_list ap;
     int pos = 0;
@@ -223,18 +200,10 @@ void cmd_return(const char *fmt, ...) {
     cmd_return_raw(g_rsp_buf, pos);
 }
 
-// ============================================================
-// IRQ
-// ============================================================
-
 void cmd_irq_handler(void) {
     g_irq_pending = 1;
     if (g_mailbox) g_mailbox->irq_ack_flag = 1;
 }
-
-// ============================================================
-// Dispatch
-// ============================================================
 
 static cmd_handler_t find_handler(const char *name) {
     int i;
@@ -281,10 +250,6 @@ static void dispatch_cmd(void) {
     g_mailbox->cmd_flag = 0;
 }
 
-// ============================================================
-// Main loops
-// ============================================================
-
 void cmd_poll_once(void) {
     if (!g_mailbox) return;
     if (g_mailbox->cmd_flag == 1) {
@@ -295,7 +260,6 @@ void cmd_poll_once(void) {
 
 void cmd_loop(void) {
     while (1) {
-        // Check exit request from SV (exit_flag == 1)
         if (g_mailbox->exit_flag == 1) {
             g_mailbox->exit_flag = 0;  // ACK
             return;
@@ -318,10 +282,6 @@ void cmd_exit(int code) {
     g_mailbox->exit_code = (unsigned int)code;
     g_mailbox->exit_flag = 2;  // 2 = C requests SV to exit
 }
-
-// ============================================================
-// Built-in commands: cpu_read32, cpu_write32, cpu_read64, cpu_write64
-// ============================================================
 
 static void builtin_cpu_read32(const char *args) {
     unsigned long long addr = cmd_get_long(args, "addr", 0);
@@ -353,10 +313,6 @@ static void builtin_cpu_write64(const char *args) {
     cmd_return("ok addr=0x%08x data=0x%08x%08x", (unsigned int)addr, hi, lo);
 }
 
-// ============================================================
-// Byte swap helpers
-// ============================================================
-
 static unsigned int swap32(unsigned int v) {
     return ((v & 0xFF000000) >> 24) |
            ((v & 0x00FF0000) >>  8) |
@@ -374,10 +330,6 @@ static unsigned long long swap64(unsigned long long v) {
            ((v & 0x000000000000FF00ULL) << 40) |
            ((v & 0x00000000000000FFULL) << 56);
 }
-
-// ============================================================
-// Swap commands: cpu_read32_swap, cpu_write32_swap, cpu_read64_swap, cpu_write64_swap
-// ============================================================
 
 static void builtin_cpu_read32_swap(const char *args) {
     unsigned long long addr = cmd_get_long(args, "addr", 0);
@@ -413,11 +365,7 @@ static void builtin_cpu_write64_swap(const char *args) {
     cmd_return("ok addr=0x%08x swapped=0x%08x%08x", (unsigned int)addr, hi, lo);
 }
 
-// ============================================================
-// Poll: cpu_poll32 — poll addr until (data & mask) == expect, with timeout
-// Usage: cpu_poll32 addr=0x100 mask=0x1 expect=0x1 timeout=1000
-//        timeout unit: poll iterations (not cycles)
-// ============================================================
+// cpu_poll32 addr= mask= expect= timeout=: poll until (data & mask) == expect; timeout counts iterations, not cycles.
 
 static void builtin_cpu_poll32(const char *args) {
     unsigned long long addr = cmd_get_long(args, "addr", 0);
@@ -438,10 +386,6 @@ static void builtin_cpu_poll32(const char *args) {
     cmd_return("timeout data=0x%08x mask=0x%08x expect=0x%08x iter=%d",
                data, mask, expect, timeout);
 }
-
-// ============================================================
-// Register all built-in commands
-// ============================================================
 
 void cmd_register_builtins(void) {
     cmd_register("cpu_read32",       builtin_cpu_read32);

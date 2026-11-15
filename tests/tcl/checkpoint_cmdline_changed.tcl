@@ -1,5 +1,4 @@
-# tests/tcl：CLI B 恢复旧快照，验证首次/重复恢复、override、loader 切换及刷新后链式保存。
-# restore 均为顶层语句，随后重新加载定义；不在 proc/catch 内执行原生恢复。
+# CLI B 恢复旧快照：首次/重复恢复、override、loader 切换及刷新后链式保存；restore 均在顶层执行，之后重新加载定义。
 source [file join $::env(AIP_CORE) tests tcl checkpoint_cmdline_common.tcl]
 run 10ns
 ckpr_sample B B singleton 22

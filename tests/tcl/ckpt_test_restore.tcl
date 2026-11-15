@@ -1,9 +1,5 @@
-# Checkpoint restore regression, stage 2: resume from the base snapshot.
-# Launched by `make test_checkpoint_restore` from tests/sv/.
-#
-# Restoring is only useful if the whole AIP surface still works afterwards, so
-# this checks the command table, the SV bridge round trip, the UCLI helpers,
-# simulation progress, and taking a further snapshot from the restored session.
+# Checkpoint restore regression, stage 2: resume from the base snapshot (launched from tests/sv/).
+# Checks the command table, bridge round trip, UCLI helpers, progress and a chained snapshot.
 set ::env(AIP_CORE) [file normalize ../..]
 source [file join $::env(AIP_CORE) dist aip_init.tcl]
 set ::aip_ckpt_dir ./ckpt_restore_artifacts

@@ -1,6 +1,4 @@
-# dist/tests：验证真实 loader 在 VCS 缺失文件元数据时的路径恢复与诊断。
-# 每次加载使用独立解释器；仅替换 info 元数据和二进制 load，临时库/源码归本测试所有。
-# frame cmd 作为不可信文本输入，不允许执行其变量、命令替换或附带脚本。
+# 真实 loader 在 VCS 缺失文件元数据时的路径恢复与诊断；frame cmd 视为不可信文本，不允许执行其中的替换或脚本。
 set repo [file normalize [file join [file dirname [info script]] .. ..]]
 set channel [file tempfile temporary]
 close $channel
@@ -8,7 +6,6 @@ file delete $temporary
 set original_cwd [pwd]
 set passed 0
 
-# 使用实际 loader，注入一条 VCS frame 记录；返回加载结果和已选择的仓库根目录。
 # env_root 非空时设置明确 fallback；异常以普通结果返回，便于检查错误上下文。
 proc probe {loader frame {env_root ""}} {
     set child [interp create]
@@ -46,7 +43,6 @@ proc probe {loader frame {env_root ""}} {
     }
 }
 
-# 单个契约失败立即报错，最终 PASS 不能掩盖中途失败。
 proc check {name condition} {
     if {!$condition} { error "FAIL $name" }
     incr ::passed

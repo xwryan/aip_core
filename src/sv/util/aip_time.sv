@@ -1,22 +1,15 @@
-//===========================================================
-// 时间工具类：提供仿真时间获取和精确延迟功能
-// 支持 longint 和 real 类型延迟，与 timescale 无关
-//===========================================================
+// 仿真时间获取与精确延迟工具，与调用方 timescale 无关。
 `ifndef AIP_TIME_SV
 `define AIP_TIME_SV
 
-// 强制 1ps 精度，保证亚 ns 延迟（高频时钟 half-period < 1ns）不被截断
 `timescale 1ns/1fs  // 精度 1fs：亚 ps 半周期（如 10.3125GHz 串行钟）不被截断
 
 class aip_time;
 
-    // ---------- 静态成员（用于延迟测量结果缓存）----------
-    static bit   measured = 0;          // 是否已完成测量
+    static bit   measured = 0;
     static real  unit_fs;                // 当前 timescale 的每个时间单位对应的飞秒数
 
-    // ---------- 公共静态方法：获取当前仿真时间（指定单位）----------
-    // 支持的单位：fs, ps, ns, us, ms, s, m, h
-    // 返回：当前仿真时间（实数），若单位非法返回 -1000.0，解析失败返回 -2000.0
+    // unit: fs/ps/ns/us/ms/s/m/h；非法单位返回 -1000.0，解析失败返回 -2000.0。
     static function real get_sim_time(string unit = "ns");
         real time_fs = real'($realtime / 1fs);
         real divisor;
@@ -34,8 +27,7 @@ class aip_time;
         return time_fs / divisor;
     endfunction
 
-    // ---------- 内部方法：确保测量完成（消耗 #1 仿真时间）----------
-    // 保留供 get_sim_time 等场景使用，delay_ns 不再依赖此方法
+    // 会消耗 #1 仿真时间；delay_ns 不依赖它。
     protected static task ensure_measured();
         longint unsigned start_fs, end_fs, delta_fs;
 
@@ -55,8 +47,7 @@ class aip_time;
         measured = 1;
     endtask
 
-    // ---------- 公共静态任务：延迟指定的纳秒数（与 timescale 无关）----------
-    // 使用 1ns 时间字面量直接转换，零额外仿真时间开销
+    // 用 1ns 时间字面量换算，与 timescale 无关，无额外仿真时间开销。
     static task delay_ns(real ns);
         realtime delay_time;
 
@@ -66,7 +57,7 @@ class aip_time;
         #(delay_time);
     endtask
 
-    // ---------- 整数版本（保持向后兼容）----------
+    // 整数版本，保留向后兼容。
     static task delay_ns_int(longint ns);
         delay_ns(real'(ns));
     endtask

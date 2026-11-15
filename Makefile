@@ -1,6 +1,5 @@
-# 项目根目录回归入口：编排 tests/sv、tests/tcl 等测试及其检查点。
-# VCS 目标依赖服务器工具链；每个目标拥有其 simv、csrc 和日志，clean 统一清理。
-# AIP core — VCS regression targets (run `make help` for the list)
+# AIP core — VCS regression targets (run `make help` for the list).
+# 每个目标拥有自己的 simv、csrc 和日志，clean 统一清理。
 MAKEFILE_DIR        := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 AIP_ROOT_DIR        := $(abspath $(MAKEFILE_DIR))
 AIP_INCLUDE_DIR     := $(AIP_ROOT_DIR)/include
@@ -37,7 +36,7 @@ AIP_TEST_INCDIRS := +incdir+../.. +incdir+../../src/sv +incdir+../../src/sv/core
 
 all: help
 
-# RAL Task1基础契约与Task3配置索引；分别重编UVM源码，不复用预编译UVM或跨宽度缓存。
+# RAL 基础契约与配置索引；每个目标重编 UVM 源码，不复用预编译 UVM 或跨宽度缓存。
 test_ral_config:
 	bash tests/ral/run_foundation.sh default
 
@@ -58,14 +57,14 @@ test_ral_128:
 	$(MAKE) test_ral_transport_128
 	$(MAKE) test_ral_op_128
 
-# Task2采用独立目录和真实UCLI入口，不并入Task1 foundation覆盖声明。
+# RAL 命令生命周期：独立目录与真实 UCLI 入口，不并入 foundation 覆盖。
 test_ral_lifecycle:
 	bash tests/ral/run_lifecycle.sh default
 
 test_ral_lifecycle_128:
 	bash tests/ral/run_lifecycle.sh width128
 
-# Task4 transport 与 Task5 命名访问；每个目标在独立宽度目录中重编 UVM/DPI。
+# RAL transport 与命名访问（ral_op）；每个目标在独立宽度目录中重编 UVM/DPI。
 test_ral_transport:
 	bash tests/ral/run_transport.sh default
 
@@ -107,7 +106,7 @@ help:
 	@echo "Host-only: test_checkpoint_wait_tcl (tclsh), ci-host (gcc)"
 	@echo "CI bundles: ci-host ci-sv ci-cmd ci-regress ci; distribution: make -C dist all|test"
 
-# 控制层的host状态机单测不能替代53真实VCS；二者都属于暂停续跑门禁。
+# 控制层 host 状态机单测，不能替代真实 VCS 回归；二者都属于暂停续跑门禁。
 test_sim_control_tcl:
 	tclsh $(TEST_TCL_DIR)/test_sim_control_unit.tcl
 
@@ -213,7 +212,6 @@ test_end_checker_registry:
 		done
 
 # Checkpoint save + restore round trip — requires VCS on PATH.
-# save/restore needs no more than the +r+w+f the Tcl bridge already requires.
 test_checkpoint_restore: $(TEST_SV_DIR)/test_checkpoint_wait.sv $(TEST_TCL_DIR)/ckpt_gen_base.tcl $(TEST_TCL_DIR)/ckpt_test_restore.tcl
 	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps \
 	    -debug_access+r+w+f -full64 -lca $(AIP_TEST_INCDIRS) \
@@ -298,10 +296,7 @@ test_user_seq:
 	    test_user_seq.sv
 	cd $(TEST_SV_DIR) && ./simv_user_seq -ucli -do ../tcl/test_user_seq.tcl
 
-# 逐命令异步控制的端到端回归。只在 53 上运行，日志归本目标所有；
-# Tcl 与 SV 双标记避免 UCLI 执行脚本文字回显造成假 PASS。
-# set_param 表达式必须与 plusarg 共用语义，并经过真实 Tcl/UCLI 验证。
-# 只在配置好 VCS/许可证的仿真主机执行；Python runner 保留每条负例日志。
+# set_param 表达式须与 plusarg 共用语义并经真实 Tcl/UCLI 验证；Python runner 保留每条负例日志。
 .PHONY: test_set_param_expressions bench_set_param_build
 # 只构建微基准；运行时用 BENCH_KIND/SOURCE/ITERS 与 bench.iv/rv 控制输入。
 bench_set_param_build:
@@ -314,6 +309,7 @@ test_set_param_expressions:
 	cd $(TEST_SV_DIR) && timeout 90s ./simv_set_param_tcl -no_save -exitstatus -ucli -do ../tcl/test_set_param_expressions.tcl +tclcfg.value=19 > set_param_tcl.log 2>&1
 	cd $(TEST_SV_DIR) && grep -Fxq SET_PARAM_TCL_PASS set_param_tcl.log && grep -Fxq SET_PARAM_TCL_SV_PASS set_param_tcl.log
 
+# 逐命令异步控制端到端回归；Tcl 与 SV 双标记，避免 UCLI 回显脚本文字造成假 PASS。
 test_cmd_wait:
 	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps \
 	    -debug_access+r+w+f -full64 -lca $(AIP_TEST_INCDIRS) \
@@ -328,7 +324,6 @@ test_cmd_wait:
 	    && grep -Eq '^UVM_FATAL[[:space:]]*:[[:space:]]*0[[:space:]]*$$' cmd_wait.log \
 	    && ! grep -Eq '^CMD_WAIT_FAIL|^Error-|no ack after' cmd_wait.log
 
-# Signed integer command-line parsing regression — requires VCS on PATH
 # 通用等待策略：倍率/饱和、poll/事件超时、次数上限、自行轮询与 load_params；纯 SV，无需 DPI 库。
 test_wait_policy:
 	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_wait_policy -o simv_wait_policy -Mdir=csrc_wait_policy test_wait_policy.sv
@@ -343,6 +338,7 @@ test_cmdline_query:
 	cd $(TEST_SV_DIR) && { ./simv_cmdline_query +tcq_neg +q.neg=-3 > cmdline_query_neg.log 2>&1 || true; }
 	cd $(TEST_SV_DIR) && grep -q 'requires an unsigned value' cmdline_query_neg.log && ! grep -q TCQ_FAIL cmdline_query_neg.log && echo 'TCQ_OK:   negative unsigned input is a hard fatal'
 
+# Signed integer command-line parsing regression — requires VCS on PATH
 test_cmdline_negative:
 	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -o simv_cmdline_negative -Mdir=csrc_cmdline_negative test_cmdline_negative.sv
 	cd $(TEST_SV_DIR) && ./simv_cmdline_negative "+neg_dec=-10" "+neg_hex=-0x10" "+neg_sv=-8'd10" "+plus_dec=+10" "+neg_range=[-10:-1]" "+cross_range=[-2:2]" "+neg_list=-3,-2,-1" "+neg_inc=inc:-10:10:2" "+neg_dec_seq=dec:10:-10:2" "+neg_weight={-3:=10,[-2:-1]:=20}" "+neg_bits=-1" "+positive=0x2a" > cmdline_negative.log 2>&1 || { cat cmdline_negative.log; exit 1; }
@@ -1205,7 +1201,7 @@ test_cseq_arbitration:
 
 # TCP C bridge regression: valid -> unknown -> valid.  SRC_SOCKET must turn
 # unknown commands into an ERROR reply without terminating the simulation.
-# 默认未监听、显式 Tcl 启动及完整真实客户端协议；产物隔离并保留供审查。
+# 默认未监听、显式 Tcl 启动及完整真实客户端协议。
 test_c_bridge_socket:
 	bash tests/socket/run_explicit.sh ordinary
 
@@ -1418,10 +1414,6 @@ clean:
 	rm -rf $(TEST_SV_DIR)/simv_cmdline_array_random $(TEST_SV_DIR)/simv_cmdline_array_random.daidir $(TEST_SV_DIR)/csrc_cmdline_array_random $(TEST_SV_DIR)/cmdline_array_random*.log
 	find . -type d -name __pycache__ -exec rm -rf {} +
 	find . -type d -name "*.egg-info" -exec rm -rf {} +
-
-# ============================================================
-# CI — exercise all test levels.
-# ============================================================
 
 .PHONY: ci ci-host ci-sv ci-regress
 

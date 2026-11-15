@@ -1,4 +1,4 @@
-// tests/sv/test_cmdline_array_random.sv — array modes for dynamic and static arrays
+// Array modes (list/size/each/seq/perm/unique/sort) for dynamic and static arrays.
 `include "aip_log.sv"
 `include "aip_cmdline.sv"
 

@@ -1,14 +1,6 @@
 #!/usr/bin/env bash
-# aip_core/script：管理用户级 Bash 配置；依赖 Bash/coreutils，install/remove 使用 apt。
-# 本脚本持有托管 .geekrc.sh、bashrc 标记块及工具安装清单；refresh 仅备份/更新
-# 已存在的托管配置，不联网、不提权、不改其它配置。非托管文件拒绝刷新。
-# geek-setup.sh — one-click manager for the geek bash config.
-#   install    install CLI tools + write ~/.geekrc.sh + wire ~/.bashrc
-#   disable    turn the config OFF (unwire ~/.bashrc, keep files & tools)
-#   enable     turn it back ON
-#   uninstall  unwire + remove ~/.geekrc.sh + apt-remove ONLY tools this script installed
-#   refresh    offline refresh of managed ~/.geekrc.sh (backup first)
-#   status     show current state
+# geek-setup.sh — one-click manager for the geek bash config: install|disable|enable|uninstall|refresh|status.
+# refresh 仅离线备份/更新已存在的托管 .geekrc.sh：不联网、不提权，拒绝非托管文件。
 set -uo pipefail
 
 SELF="$(readlink -f "${BASH_SOURCE[0]:-$0}")"   # this script's real path (follows symlink)
@@ -21,22 +13,18 @@ BEGIN="# >>> geek config >>>"
 END="# <<< geek config <<<"
 PKGS=(fzf bat fd-find eza zoxide)   # apt package names (binaries: batcat, fdfind)
 
-# 向stdout打印操作成功/进度；颜色不是PS1，不需要Readline标记。
+# 颜色只用于普通输出（不是 PS1），无需 Readline 标记。
 log()  { printf '\033[38;5;42m[geek]\033[0m %s\n' "$*"; }
-# 向stdout报告可继续的环境问题，不改变流程返回策略。
 warn() { printf '\033[38;5;220m[geek]\033[0m %s\n' "$*"; }
-# 向stderr打印失败原因；调用者负责返回非零。
 err()  { printf '\033[38;5;203m[geek]\033[0m %s\n' "$*" >&2; }
 
-# 已有bashrc复制到时间戳备份；文件不存在时无副作用。
 backup_bashrc() {
   [ -f "$BASHRC" ] || return 0
   local b="$BASHRC.bak.$(date +%Y%m%d_%H%M%S)"
   cp -a "$BASHRC" "$b" && log "backed up bashrc -> $b"
 }
 
-# ---- write the config file -------------------------------------------------
-# 写出托管交互配置到指定文件（默认GEEKRC）；写入失败原样返回非零。
+# 写出托管配置到指定文件（默认 GEEKRC），失败返回非零。
 write_geekrc() {
   local target="${1:-$GEEKRC}"
   cat > "$target" <<'GEEKEOF'
@@ -176,28 +164,24 @@ GEEKEOF
   log "wrote $target"
 }
 
-# ---- bashrc wiring ---------------------------------------------------------
-# 仅管理命令调用：删除标记块及历史geek引用，缺文件直接返回。
 clean_bashrc() {   # remove marker block + any legacy lines
   [ -f "$BASHRC" ] || return 0
   sed -i "/^${BEGIN}$/,/^${END}$/d" "$BASHRC"
   sed -i '/\.geekrc\.sh/d; /^# geek config$/d' "$BASHRC"
 }
-# 备份后写入托管source标记块；refresh不调用此函数。
+# 备份后写入托管 source 标记块（refresh 不调用）。
 wire_bashrc() {
   backup_bashrc; clean_bashrc
   printf '\n%s\n[ -f "$HOME/.geekrc.sh" ] && source "$HOME/.geekrc.sh"\n%s\n' "$BEGIN" "$END" >> "$BASHRC"
   log "wired source line into $BASHRC"
 }
 
-# ---- shortcut: ~/.local/bin/geek -> this script -----------------------------
-# 安装用户级快捷链接；仅提示PATH状态，不修改当前shell。
+# 只提示 PATH 状态，不修改当前 shell。
 link_shortcut() {
   mkdir -p "$(dirname "$SHORTCUT")"
   ln -sf "$SELF" "$SHORTCUT" && log "shortcut: $SHORTCUT -> $SELF"
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) warn "note: ~/.local/bin not on PATH in this shell; new bash (geekrc) adds it";; esac
 }
-# 仅删除指向当前脚本的链接，保留用户其它同名命令。
 unlink_shortcut() {
   # remove only if it points at this script (don't clobber a user's own 'geek')
   if [ -L "$SHORTCUT" ] && [ "$(readlink -f "$SHORTCUT")" = "$SELF" ]; then
@@ -205,10 +189,8 @@ unlink_shortcut() {
   fi
 }
 
-# ---- tools -----------------------------------------------------------------
-# 工具安装/卸载按UID选择提权命令；refresh不调用。
 need_sudo() { if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; else SUDO=""; fi; }
-# 安装可选apt工具并记录本脚本新增项；已有包不进入卸载清单。
+# 只记录本脚本新装的包；已有包不进入卸载清单。
 install_tools() {
   command -v apt-get >/dev/null || { warn "no apt-get; skip tool install"; return 0; }
   need_sudo; mkdir -p "$STATE_DIR"; touch "$STATE_PKGS"
@@ -238,8 +220,7 @@ remove_tools() {
   : > "$STATE_PKGS"
 }
 
-# 离线刷新仅更新本脚本生成的普通配置：唯一备份先完成，临时文件成功后原子替换。
-# 不重写bashrc/链接，不安装包或字体；拒绝符号链接和非托管配置以保留用户所有权。
+# 离线刷新：先做唯一备份，临时文件成功后原子替换；不动 bashrc/链接/包，拒绝符号链接与非托管配置。
 cmd_refresh() {
   if [ -L "$GEEKRC" ] || [ ! -f "$GEEKRC" ] ||
      [ "$(head -n 1 -- "$GEEKRC")" != '# ~/.geekrc.sh — geek bash config (managed by geek-setup.sh).' ]; then
@@ -264,18 +245,13 @@ cmd_refresh() {
   log 'refreshed offline; open a new Bash terminal to apply. Ctrl+L temporarily redraws the current screen.'
 }
 
-# ---- commands --------------------------------------------------------------
 # 完整安装会联网装工具、写配置并接入bashrc；离线更新应使用refresh。
 cmd_install()  { install_tools; write_geekrc; wire_bashrc; link_shortcut
                  log "DONE. Apply now:  source ~/.bashrc   (or open a new bash)"; }
-# 启用已有配置，缺失时生成；更新bashrc标记块。
 cmd_enable()   { [ -f "$GEEKRC" ] || write_geekrc; wire_bashrc; log "config ON. source ~/.bashrc"; }
-# 备份并移除bashrc引用，保留配置文件和工具。
 cmd_disable()  { backup_bashrc; clean_bashrc; log "config OFF (files & tools kept). Open new shell / source ~/.bashrc"; }
-# 移除托管配置/链接并按清单卸载工具，不适用于离线更新。
 cmd_uninstall(){ backup_bashrc; clean_bashrc; rm -f "$GEEKRC" && log "removed $GEEKRC"; unlink_shortcut; remove_tools
                  log "DONE. Open a new shell for a clean bash."; }
-# 只读展示配置、链接和工具状态，不安装或改写资源。
 cmd_status()   {
   printf 'geekrc file : %s\n' "$([ -f "$GEEKRC" ] && echo present || echo absent)"
   printf 'bashrc wired: %s\n' "$(grep -q '\.geekrc\.sh' "$BASHRC" 2>/dev/null && echo yes || echo no)"
@@ -285,7 +261,6 @@ cmd_status()   {
     command -v "$t" >/dev/null && printf '  %-8s %s\n' "$t" "$(command -v "$t")"; done
 }
 
-# 打印工具与管理命令帮助；颜色仅用于终端输出。
 cmd_help() {
   local H=$'\033[1;38;5;44m' A=$'\033[38;5;220m' R=$'\033[0m' D=$'\033[2m'
   cat <<EOF

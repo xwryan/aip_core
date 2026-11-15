@@ -1,6 +1,5 @@
-// src/sv/ral：Task2单例生命周期与永久恢复门禁；依赖core execution及RAL报告类型。
-// service拥有锁token、深拷贝快照和latch；调用者仅借用token且必须在真实worker中操作。
-// 不注册命令、不解析RAL对象、不访问DUT；listener只作零时间bookkeeping，不调用hook。
+// RAL service 单例：仿真期生命周期、永久恢复门禁、配置索引与命名访问执行；拥有锁 token、深拷贝快照与 recovery latch，
+// 调用者只借用 token 且须在真实 worker 中操作；listener 只做零时间 bookkeeping，不调用 hook。
 `ifndef AIP_RAL_SERVICE_SV
 `define AIP_RAL_SERVICE_SV
 
@@ -13,21 +12,19 @@ class aip_ral_cfg_map_binding;
     string alias_name;
     uvm_reg_map map;
     aip_ral_response_classifier classifier;
-    // 配置对象只在service生命周期内使用，不能单独释放map或classifier。
     function new(string alias0, uvm_reg_map map0);
         alias_name = alias0;
         map = map0;
     endfunction
 endclass
 
-// 一个用户注册root的配置快照；maps[0]固定为保留的ral alias。
+// 一个用户注册 root 的配置快照（只借用 TB 的 handle，冻结后不再替换）；maps[0] 固定为保留的 ral alias。
 class aip_ral_cfg_root_binding;
     string root_name;
     uvm_reg_block root;
     uvm_reg_map default_map;
     aip_ral_test_hook test_hook;
     aip_ral_cfg_map_binding maps[$];
-    // root binding只借用TB拥有的handle，冻结后不再接受替换。
     function new(string name0, uvm_reg_block root0, uvm_reg_map map0);
         aip_ral_cfg_map_binding map_binding;
         root_name = name0;
@@ -44,7 +41,6 @@ class aip_ral_cfg_object_entry;
     string full_name;
     aip_ral_cfg_object_kind_e kind;
     uvm_object object;
-    // entry不拥有object，模型仍由testbench控制其生命周期。
     function new(string name0, string full0, aip_ral_cfg_object_kind_e kind0,
                  uvm_object object0);
         canonical_name = name0;
@@ -68,14 +64,12 @@ endclass
 class aip_ral_owner_token;
     local longint unsigned generation;
 
-    // generation只读；值相等不等于有权限，release还必须核对对象和owner。
     function new(longint unsigned value); generation = value; endfunction
 
-    // 返回代号用于诊断和迟到通知校验，不暴露可修改字段。
     function longint unsigned get_generation(); return generation; endfunction
 endclass
 
-// 单例保存整个仿真期的recovery latch；刻意没有reset/clear/recover公共方法。
+// 单例（只能经 get() 取得，测试也不能重建）保存整个仿真期的 recovery latch；刻意没有 reset/clear/recover 公共方法。
 class aip_ral_service extends aip_cmd_liveness_listener;
     local static aip_ral_service instance;
     local aip_ral_owner_token token;
@@ -103,7 +97,6 @@ class aip_ral_service extends aip_cmd_liveness_listener;
     local bit mem_beat_order_explicit;
     local bit config_frozen;
 
-    // 只能通过get取得仿真期单例，测试也不能重建以清除永久latch。
     local function new(); endfunction
 
     // 惰性建立唯一实例；function无时间控制，检查和发布在同一调度片内完成。
@@ -112,7 +105,6 @@ class aip_ral_service extends aip_cmd_liveness_listener;
         return instance;
     endfunction
 
-    // 按注册名查找root；失败返回-1，不修改任何配置缓存。
     local function int root_pos(string root_name);
         foreach (root_cfgs[i]) if (root_cfgs[i].root_name == root_name) return i;
         return -1;
@@ -191,7 +183,6 @@ class aip_ral_service extends aip_cmd_liveness_listener;
         return {root_name,".",relative};
     endfunction
 
-    // 输出稳定种类名，供后续ral_op解析和配置测试使用。
     local function string object_kind_text(aip_ral_cfg_object_kind_e kind0);
         case (kind0)
             AIP_RAL_CFG_REG:    return "reg";
@@ -499,7 +490,7 @@ class aip_ral_service extends aip_cmd_liveness_listener;
         return AIP_RAL_CFG_OK;
     endfunction
 
-    // 配置状态与索引查询为后续ral_op/runner复用的只读接口，不提供删除或替换。
+    // 以下为只读查询接口，不提供删除或替换。
     function bit is_frozen(); return config_frozen; endfunction
     function aip_ral_mem_beat_order_e get_mem_beat_order(); return mem_beat_order; endfunction
     function int unsigned get_root_count(); return root_cfgs.size(); endfunction

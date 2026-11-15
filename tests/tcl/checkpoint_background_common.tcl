@@ -1,15 +1,12 @@
-# tests/tcl：后台快照测试共用断言，依赖已加载的 aip_init 与专属 SV 命令。
-# 本文件仅定义 helper、初始化本次 Tcl 断言计数，不启动任何 task/sequence。
-# restore 会清除 Tcl proc，因此恢复脚本必须重新 source；SV 业务由快照持有。
+# 后台快照测试的共用断言 helper（不启动任何 task/sequence）；restore 会清除 Tcl proc，恢复脚本须重新 source。
 set ::ckb_checks 0
 
-# 任一断言失败立即终止当前脚本；runner 同时要求 Tcl/SV 双 PASS 门禁。
 proc ckb_check {label condition} {
     if {!$condition} { error "CKB_CHECK_FAIL: $label" }
     incr ::ckb_checks
 }
 
-# 通过只读命令取得标量，并检查查询本身成功，避免把错误文本当作观测值。
+# 同时检查查询本身成功，避免把错误文本当作观测值。
 proc ckb_get {name field} {
     aip_send_cmd "ckb_state name=$name field=$field"
     if {[aip_check_status] != 0} { error "CKB_QUERY_FAIL: [aip_read_result]" }

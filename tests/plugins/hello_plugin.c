@@ -1,4 +1,4 @@
-/* tests/plugins/hello_plugin.c — sample aip_soload plugin */
+/* Sample aip_soload plugin. */
 #include "aip_plugin.h"
 #include <stdio.h>
 #include <string.h>
@@ -14,8 +14,6 @@ static void do_upper(const char *args, char *resp, int max) {
     }
     resp[i] = 0;
 }
-
-/* --- real functions wrapped as command handlers --- */
 
 /* CRC-32 (reflected, poly 0xEDB88320, init/xorout 0xFFFFFFFF).
  * CRC32("123456789") == 0xCBF43926. Computed over the raw args string. */

@@ -1,10 +1,8 @@
-// src/sv/ral：内部物理观察层，依赖UVM标准HDL路径及backdoor API。
-// runner拥有observer及四态snapshot；本类借用模型，不改变mirror或产生总线事务。
-// field始终使用完整parent register，从而保留sibling/hole；不假设独立field路径。
+// 内部物理观察层（UVM 标准 HDL 路径与 backdoor）：借用模型，不改变 mirror、不产生总线事务；
+// field 始终读写完整 parent register，以保留 sibling/hole。
 `ifndef AIP_RAL_RAW_OBSERVER_SV
 `define AIP_RAL_RAW_OBSERVER_SV
 class aip_ral_raw_observer;
-    // 不注册额外provider；访问所有权完全来自模型配置。
     function new(); endfunction
 
     // 写前验证全部副本覆盖。缺能力为UNTESTABLE；实际HDL路径不存在由访问报告失败。

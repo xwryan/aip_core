@@ -1,19 +1,6 @@
-# ============================================================
-# firmware/Makefile — AIP CPU firmware build (XuanTie C908, RV64).
-#
-# Wake modes (3 commands):
-#   make poll      # CPU 轮询 cmd_flag        → build/poll.hex
-#   make msip      # SV 后门 CLINT MSIP 唤醒   → build/msip.hex
-#   make plic      # SV 后门 PLIC IP 唤醒      → build/plic.hex
-#   make all       # 三个都编
-#   make clean
-#
-# Boot mode:  BOOT=rom (XIP, default) | ram_copy (ROM→RAM copy) | ram_jump (stub→RAM)
-#   make plic BOOT=ram_copy   → build/plic_ram_copy.hex
-#
-# Toolchain default = XuanTie (绝对路径, 避免 PATH 命中 /usr/bin 通用 gcc).
-# Override: make plic CROSS=/path/to/riscv64-unknown-elf-
-# ============================================================
+# AIP CPU firmware build (XuanTie C908, RV64): make poll|msip|plic|all -> build/<wake>[_<boot>].hex.
+# BOOT=rom (XIP, default) | ram_copy (ROM→RAM copy) | ram_jump (stub→RAM).
+# 默认用 XuanTie 工具链绝对路径（避免 PATH 命中 /usr/bin 通用 gcc），可用 CROSS=... 覆盖。
 
 CROSS   ?= /home/ubuntu/aip_xuantie/Xuantie-900-gcc-elf-newlib-x86_64-V3.4.0/bin/riscv64-unknown-elf-
 CC      := $(CROSS)gcc
@@ -26,7 +13,6 @@ CFLAGS := -march=$(ARCH) -mabi=$(ABI) -mcmodel=medany -O2 -g \
           -nostdlib -nostartfiles -ffreestanding -fno-builtin \
           -Wall -Wextra -Iapp -Icore
 
-# ---- boot 旋钮 (rom XIP / ram_copy / ram_jump) ----
 BOOT ?= rom
 ifeq ($(BOOT),rom)
 LDSCRIPT  := arch/linker.xuantie.ld
@@ -51,7 +37,7 @@ BUILD      := build
 COMMON_SRC := app/main.c app/user_cmds.c core/aip_cmd.c core/handlers.c
 ASM_SRC    := arch/startup.S $(BOOT_STUB)
 
-# ---- 顶层 wake 目标 (递归调 _img, 设 WAKE/EXTRA_SRC/EXTRA_DEF) ----
+# 顶层 wake 目标递归调用 _img，并传入 WAKE/EXTRA_SRC/EXTRA_DEF。
 .PHONY: poll msip plic all clean
 poll: ; @$(MAKE) --no-print-directory _img WAKE=poll EXTRA_SRC= EXTRA_DEF=
 msip: ; @$(MAKE) --no-print-directory _img WAKE=msip EXTRA_SRC=core/aip_cmd_msip.c EXTRA_DEF=-DAIP_USE_MSIP
@@ -59,7 +45,6 @@ plic: ; @$(MAKE) --no-print-directory _img WAKE=plic EXTRA_SRC=core/aip_cmd_c908
 all:  ; @$(MAKE) poll && $(MAKE) msip && $(MAKE) plic
 clean: ; rm -rf $(BUILD)
 
-# ---- 内部构建目标 (WAKE/EXTRA_SRC/EXTRA_DEF 由顶层目标传入) ----
 NAME   := $(WAKE)$(BOOT_SFX)
 OBJDIR := $(BUILD)/$(NAME)
 SRCS   := $(COMMON_SRC) $(EXTRA_SRC)

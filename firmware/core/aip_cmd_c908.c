@@ -2,9 +2,7 @@
 #include "aip_cmd.h"
 #include "aip_chip.h"
 
-// ============================================================
-// PLIC register access (hart-parameterized for future multi-core)
-// ============================================================
+// PLIC register access (hart-parameterized for future multi-core).
 static inline void plic_set_priority(unsigned int src, unsigned int prio) {
     *(volatile unsigned int *)(PLIC_BASE + src * 4) = prio;
 }
@@ -28,11 +26,8 @@ static inline unsigned long current_hart(void) {
     return h;
 }
 
-// ============================================================
-// Machine external interrupt handler (__Vectors slot 11, mcause=11)
-// XuanTie vectored mtvec jumps here directly; interrupt attr saves context+mret.
-// A-mode wake: SV deposits PLIC_IP pending; claim clears it; complete = EOI.
-// ============================================================
+// Machine external interrupt (__Vectors slot 11, mcause=11): XuanTie vectored mtvec jumps here and the
+// interrupt attribute saves context + mret. SV deposits PLIC_IP pending; claim clears it, complete = EOI.
 __attribute__((interrupt("machine")))
 void Mirq_Handler(void) {
     unsigned long hart = current_hart();
@@ -41,9 +36,7 @@ void Mirq_Handler(void) {
     plic_complete(hart, id);
 }
 
-// ============================================================
-// Init — DOES NOT touch mtvec (XuanTie startup owns it, vectored mode).
-// ============================================================
+// Does not touch mtvec: XuanTie startup owns it (vectored mode).
 void cmd_irq_init(void) {
     unsigned long hart = current_hart();
     plic_set_priority(IRQ_NUM_MAILBOX, 1);   /* priority must be > 0 */

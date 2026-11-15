@@ -1,7 +1,5 @@
-/* aip_soload.c — resident DPI-C stub: runtime dlopen of command plugins.
- * Compiled into simv (add to vcs C sources, link -ldl). Holds a command
- * table name->fn and a .so handle table. SV imports the aip_so_* functions.
- */
+/* Resident DPI-C stub compiled into simv (link -ldl): runtime dlopen of command plugins,
+ * with a name->fn command table and a .so handle table. */
 #include <stdio.h>
 #include <string.h>
 #include <dlfcn.h>

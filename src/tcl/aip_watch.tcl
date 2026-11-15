@@ -1,18 +1,12 @@
-# src/tcl：一次性逻辑信号观察，依赖 VCS get/stop 和 aip_sim_control.tcl。
-# 本模块只拥有自己注册的 stop ID 与状态记录，不改用户 onbreak，不推进仿真
-# 来安装观察。匹配时精确通知；stop=1 请求受控的原生 pause，活动 AIP 栈由推进层
-# 暂停，自主推进则在 simulator-owned 回调中暂停。
-# 不另建 TCP EVENT 协议；TCP 注册仍复用本模块的 native stop 回调。活动观察不随 checkpoint 保存，保存/恢复
-# 前必须取消，避免 VCS 快照与未回滚的 Tcl 全局表分别持有不同断点所有权。
+# 一次性逻辑信号观察（VCS get/stop）：只拥有自己注册的 stop ID 与状态，不改用户 onbreak，安装时不推进仿真。
+# stop=1 请求受控原生 pause；TCP 注册复用同一 native stop 回调。活动观察不随 checkpoint 保存，保存/恢复前必须取消。
 
 if {![info exists ::_aip_watch_next_id]} { set ::_aip_watch_next_id 0 }
 if {![info exists ::_aip_watches]} { set ::_aip_watches [dict create] }
 if {![info exists ::_aip_watch_deferred_output]} { set ::_aip_watch_deferred_output {} }
 
-# ACK/helper advances may redirect the native run's stdout to suppress an
-# internal $stop(0) diagnostic. Notifications from those two modes are emitted
-# after the run returns, while autonomous and normal run callbacks print them
-# immediately. The queue is module-owned and survives a repeated source.
+# ACK/helper advances may redirect native stdout (to hide an internal $stop(0) diagnostic), so their
+# notifications are emitted after the run returns; other runs print immediately. The queue survives re-source.
 proc _aip_watch_flush_deferred_output {} {
     set output $::_aip_watch_deferred_output
     set ::_aip_watch_deferred_output {}
@@ -20,9 +14,7 @@ proc _aip_watch_flush_deferred_output {} {
     return [llength $output]
 }
 
-# ACK/helper advances may redirect native output. Keep watch diagnostics and
-# file-write warnings in the same deferred channel so they remain visible and
-# are emitted before a queued pause is entered.
+# Diagnostics and warnings share the deferred channel so they stay visible and precede a queued pause.
 proc _aip_watch_emit {line} {
     set color green
     if {[string first {[AIP_WATCH] warning:} $line] == 0} { set color yellow }
@@ -38,8 +30,7 @@ proc _aip_watch_emit {line} {
     }
 }
 
-# 严格读取无符号二态整数；X/Z、负数、下划线和表达式明确拒绝。逐位累计
-# 使用 Tcl 整数，不经过会截断大向量的机器宽度转换，也不把未知值当成零。
+# 严格解析无符号二态整数（拒绝 X/Z、负数、下划线和表达式）；逐位用 Tcl 大整数累计，不截断宽向量。
 proc _aip_watch_number {raw} {
     set value [string trim $raw]
     set base 10
@@ -182,11 +173,9 @@ proc _aip_watch_parse_options {arguments} {
     return [dict create stop $stop file $file ctx $ctx]
 }
 
-# 原生 stop 回调只消费自己的观察，先删除断点并发布最终状态。AIP 自己的
-# run/ack/helper 正在执行时，回调只排队，交给推进层在 _vcs_run 返回后暂停，
-# 这样有限 run 可以补完剩余窗口且不会重入原请求。没有活动 AIP owner 的
-# 自主/SV/TCP 推进路径则在 simulator-owned stop 回调中直接进入受控 pause，
-# 否则 VCS 只会报告普通 Stop point，无法保留当前 Tcl 调用栈。
+# 回调只消费自己的观察：先删除断点并发布终态。AIP run/ack/helper 执行中只排队，由推进层在 _vcs_run 返回后暂停
+# （有限 run 可补完剩余窗口且不重入原请求）；无 AIP owner 的自主/SV/TCP 推进则在回调中直接进入受控 pause，
+# 否则 VCS 只报普通 Stop point，无法保留 Tcl 调用栈。
 proc _aip_watch_hit {id {immediate 0}} {
     set record [_aip_watch_require $id]
     if {[dict get $record state] ne "armed"} { return }
@@ -195,10 +184,8 @@ proc _aip_watch_hit {id {immediate 0}} {
     set target_kind [dict get $record target_kind]
     if {$target_kind eq "unknown"} {
         if {![_aip_watch_unknown_match $raw [dict get $record expected]]} {
-            # stop -change also wakes on ordinary known transitions.  Tell
-            # the managed run loop that this was an AIP-owned stop so it can
-            # resume the same deadline; no user-visible notification is
-            # emitted until the requested X/Z state is actually present.
+            # stop -change also wakes on ordinary transitions: mark it AIP-owned so the managed run resumes the
+            # same deadline; nothing is printed until the requested X/Z state is actually present.
             if {!$immediate} {
                 _aip_control_signal_watch "watch $id: $path probe" 0
             }
@@ -228,10 +215,8 @@ proc _aip_watch_hit {id {immediate 0}} {
             ![dict get $state watch_paused]}]
         if {$autonomous_context} {
             _aip_watch_emit "\[AIP_WATCH\] id=$id path=$path value=$raw time=[dict get $record time]"
-            # No AIP owner will drain a stop=1 event after a simulator-owned
-            # stop, so enter retained native pause immediately. Notification-
-            # only watches keep the historical queued stop behavior; a later
-            # AIP advance can consume it and continue from the stop point.
+            # No AIP owner will drain a stop=1 event after a simulator-owned stop, so pause immediately;
+            # notify-only watches keep the queued stop, which a later AIP advance consumes.
             if {$should_pause} {
                 _aip_control_pause "watch $id: $path"
             } else {
@@ -245,15 +230,11 @@ proc _aip_watch_hit {id {immediate 0}} {
     }
 }
 
-# 立即注册一次性观察并返回稳定 ID，不等待信号变化。expected 为二态无符号
-# 数值，或直接写 x/z 观察值中首次出现对应未知态；默认只通知，显式 stop=1
-# 才保栈暂停。路径仅允许普通层次/数组索引，不允许把表达式或 Tcl 脚本拼入
-# 条件。不存在的路径/原生注册失败原样报错。
+# 立即注册一次性观察并返回 ID。expected 为二态无符号数或 x/z（首次出现该未知态）；默认只通知，stop=1 才保栈暂停。
+# 路径只允许层次名/数组索引，不拼入表达式或脚本；路径不存在/原生注册失败原样报错。
 proc aip_watch {path expected args} {
-    # A TCP registration can be received while a user Tcl script is inside
-    # `run`.  The control helper permits only this read-only registration
-    # operation in that narrow context; it does not permit advancing, force,
-    # bridge handshakes, or pause/recovery commands.
+    # A TCP registration may arrive while a user script is inside `run`; only this read-only registration
+    # is allowed there (no advancing, force, bridge handshake or pause/recovery).
     _aip_control_assert_watch_registration_allowed
     set tcp_registration [expr {[info exists ::_aip_watch_tcp_mode] && $::_aip_watch_tcp_mode}]
     if {![regexp {^[A-Za-z_$][A-Za-z0-9_$]*(\[[0-9]+\])*(\.[A-Za-z_$][A-Za-z0-9_$]*(\[[0-9]+\])*)*$} $path]} {
@@ -284,10 +265,8 @@ proc aip_watch {path expected args} {
         stop $should_pause file $file_path ctx $context file_status $file_status file_error {} \
         state armed value "" time "" native_id ""]
     if {$current_match} {
-        # Idle registration can resolve an already-matched value without
-        # creating a transient native stop point.  A TCP registration made
-        # inside an active run queues the event instead of entering pause from
-        # the nested MHPI Tcl call.
+        # Idle registration resolves an already-matched value without a transient native stop; a TCP
+        # registration inside an active run queues the event instead of pausing from the nested MHPI call.
         _aip_watch_hit $id [expr {!$tcp_registration}]
         return $id
     }
@@ -316,10 +295,8 @@ proc aip_watch {path expected args} {
     return $id
 }
 
-# 取消仅影响自己仍 armed 的断点，重复取消或已完成观察不产生新的通知。
-# 省略 ID 时取消全部 armed 观察并返回被取消的 ID 列表；带 ID 时保留单个
-# 观察的原有返回语义。调试暂停时允许取消其他观察；不调用桥或推进仿真，
-# 不改变原 pending 请求。
+# 只取消自己仍 armed 的断点，重复取消或已完成观察不再通知；省略 ID 取消全部并返回被取消的 ID 列表。
+# 调试暂停时允许取消，不调用桥、不推进仿真、不改变原 pending 请求。
 proc aip_watch_cancel {{id ""}} {
     if {$id eq ""} {
         set canceled {}
@@ -349,10 +326,8 @@ proc aip_watch_cancel {{id ""}} {
 # 查询不消费通知，不改变断点/仿真时间，允许在保栈暂停提示符内调用。
 proc aip_watch_status {{id ""}} {
     if {$id eq ""} {
-        # Keep the socket/Tcl bridge response non-empty when no observation is
-        # registered. MHPI's no-print API uses an empty return string for both
-        # a valid empty result and an error, so `{}` is the unambiguous
-        # successful empty-table representation for remote callers.
+        # Never return an empty string: MHPI's no-print API uses it for both an empty result and an error,
+        # so `{}` is the unambiguous empty table for remote callers.
         if {[dict size $::_aip_watches] == 0} { return "{}" }
         return $::_aip_watches
     }

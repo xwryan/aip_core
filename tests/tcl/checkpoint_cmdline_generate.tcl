@@ -1,5 +1,4 @@
-# tests/tcl：在旧 CLI A 下保存快照，含一个已有 override；不允许恢复逻辑影响普通启动。
-# 本阶段只保存 base，所有快照/日志归 runner；恢复期望由独立脚本给出。
+# 在旧 CLI A 下保存含一个 override 的 base 快照；恢复逻辑不能影响普通启动。
 source [file join $::env(AIP_CORE) tests tcl checkpoint_cmdline_common.tcl]
 run 10ns
 ckpr_pending 0

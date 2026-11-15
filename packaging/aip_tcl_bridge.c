@@ -1,17 +1,5 @@
-/* Tcl extension wrapper for the AIP Tcl command implementation.
- * The generated payload (the Tcl files under src/tcl, concatenated by
- * packaging/scripts/embed_tcl.py) is embedded in the shared object; no Tcl
- * source file is read at runtime.
- *
- * Load from a UCLI/Tcl script through dist/aip_init_so.tcl, or directly:
- *   load /path/to/dist/lib/libaip_tcl_bridge.so
- *
- * VCS embeds its Tcl interpreter inside libvcsucli.so and exports no Tcl_*
- * symbols, so the extension cannot call Tcl_Eval.  It evaluates the payload
- * through the UCLI API mhpi_ucliTclExecNoPrint(), which libvcsucli.so does
- * export and which runs in the UCLI interpreter (procs and globals persist).
- * No Tcl runtime is linked into this object.
- */
+/* Tcl extension wrapper: embeds the src/tcl payload (built by packaging/scripts/embed_tcl.py), so no Tcl
+ * file is read at runtime. Load via dist/aip_init_so.tcl or `load .../libaip_tcl_bridge.so`. */
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -22,8 +10,8 @@
 
 typedef struct Tcl_Interp Tcl_Interp;
 
-/* mhpi_ucliTclExecNoPrint: evaluate a Tcl script in the UCLI interpreter and
- * return its result string (no echo to the console). */
+/* VCS exports no Tcl_* symbols (its interpreter lives in libvcsucli.so), so the payload goes through the
+ * exported UCLI API mhpi_ucliTclExecNoPrint(): evaluated in the UCLI interpreter, no console echo. */
 typedef char *(*aip_ucli_exec_fn)(const char *script);
 
 static aip_ucli_exec_fn aip_resolve_ucli_exec(void) {
@@ -34,13 +22,9 @@ static aip_ucli_exec_fn aip_resolve_ucli_exec(void) {
 
 /* Entry point Tcl derives from the file name libaip_tcl_bridge.so. */
 int Aip_tcl_bridge_Init(Tcl_Interp *interp) {
-    /* ::aip_tcl_embedded    — tells aip_cmd.tcl the checkpoint implementation is
-     *                         already embedded (do not source it from disk).
-     * ::_aip_bridge_started — suppresses the file-scope bridge start in
-     *                         aip_cmd.tcl.  Its $stop handshake must not run
-     *                         inside `load` (a nested evaluation there corrupts
-     *                         the Tcl stack); dist/aip_init_so.tcl starts the
-     *                         bridge after `load` returns. */
+    /* ::aip_tcl_embedded: the checkpoint code is embedded, do not source it from disk.
+     * ::_aip_bridge_started: skip aip_cmd.tcl's file-scope bridge start; its $stop handshake must not run
+     * inside `load` (nested evaluation corrupts the Tcl stack), aip_init_so.tcl starts it afterwards. */
     static const char init_script[] =
         "unset -nocomplain ::_aip_payload_ok\n"
         "set ::aip_tcl_embedded 1\n"

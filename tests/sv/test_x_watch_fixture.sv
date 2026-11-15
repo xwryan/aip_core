@@ -1,4 +1,4 @@
-// tests/sv：aip_watch x/z 的真实四态变化夹具。
+// aip_watch x/z 的真实四态变化夹具。
 `include "aip_core_pkg.sv"
 
 module test_x_watch_fixture;

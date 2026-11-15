@@ -1,17 +1,13 @@
-# tests/tcl：纯 Tcl 控制层单测，拥有独立虚拟时间/桥接槽/事件队列。
-# 模拟原生推进/暂停，不冒充 VCS 行为验证；通过真实 Tcl execution frame
-# 结构区分 pause% 与 stop 回调，检查嵌套推进不覆盖原 owner/结果/截止时间。
-# 真实 pause%、Ctrl+C、二进制入口及 UVM sequence 另由 53 上的 PTY 回归覆盖。
+# 纯 Tcl 控制层单测（独立虚拟时间/桥接槽/事件队列，模拟原生推进/暂停）：经真实 Tcl execution frame 区分 pause% 与 stop 回调，
+# 检查嵌套推进不覆盖原 owner/结果/截止时间。真实 pause%、Ctrl+C、二进制入口由 VCS 上的 PTY 回归覆盖。
 set test_root [file normalize [file join [file dirname [info script]] ../..]]
 set control_file [file join $test_root src tcl aip_sim_control.tcl]
 set checks 0
 
-# 所有断言失败立即以非零进程状态退出，不允许打印 PASS 后继续隐藏错误。
 proc check {name condition} {
     if {!$condition} { error "SIM_CONTROL_UNIT_FAIL: $name" }
     incr ::checks
 }
-# 精确比较 Tcl 字符串/字典字段并计入检查数；失败沿用统一异常出口。
 proc equal {name actual expected} { check "$name: '$actual' != '$expected'" [expr {$actual eq $expected}] }
 # 只接受指定错误码；TCL_RETURN/BREAK 等不能被当成安全的拒绝。
 proc rejects {name script errorcode} {
@@ -20,8 +16,7 @@ proc rejects {name script errorcode} {
     equal "$name errorcode" [dict get $options -errorcode] $errorcode
 }
 
-# 控制层绝不可替换这些用户/原生入口。
-# 用户 hook 夹具只返回固定文本，用于检测控制层是否偷换了 onbreak。
+# 控制层绝不可替换这些用户/原生入口；固定返回文本用于检测是否偷换了 onbreak。
 proc onbreak {args} { return {user_break_handler} }
 # 原生 resume 夹具区分有效恢复、帮助和非法参数，供 execution trace 验证。
 proc resume {args} {

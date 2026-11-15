@@ -1,16 +1,11 @@
-// tests/sv：逐调用结果上下文与旧字符串宏后台兼容的独立调度测试。
-// 依赖 AIP package，不需要真实 DUT 或 sequencer。框架拥有注册对象/执行
-// 进程；测试只保留公开上下文句柄用于生命周期验证，正常路径不修改其
-// 内部字段。plusarg 负例必须独立运行，并由外层 runner 认定预期 fatal。
+// 逐调用结果上下文与旧字符串宏后台兼容的独立调度测试（无需 DUT/sequencer）；plusarg 负例独立运行，由 runner 认定预期 fatal。
 `timescale 1ns/1ps
 `include "aip_core_pkg.sv"
 
-// 单寄存器内存替身只覆盖 cpu_wait 的结果传播，不依赖 HDL backdoor 权限。
-// 测试拥有此对象并经 cpu_mem 借给 loader；并发阶段仅由 cpu_wait 读取。
+// 单寄存器内存替身，只覆盖 cpu_wait 的结果传播；固定低地址以免 signed int 地址扩展干扰。
 class result_context_region extends aip_cpu_region;
     bit [31:0] value;
 
-    // 固定低地址避免 signed int 地址扩展干扰；仅支持一个 32-bit 寄存器。
     function new();
         name = "context_ready_register";
         base = 'h1000;
@@ -18,14 +13,12 @@ class result_context_region extends aip_cpu_region;
         value = 0;
     endfunction
 
-    // 写入只用于测试初始化，越界或宽度错误由测试立即终止。
     virtual task write_impl(input longint unsigned off,
                             input longint unsigned data, input int width);
         if (off != 0 || width != 32) $fatal(1, "CONTEXT_REGION_BAD_WRITE");
         value = data[31:0];
     endtask
 
-    // 对合法读取返回寄存器和成功标志，不伪造 ready 或 timeout 的业务结果。
     virtual task read_impl(input longint unsigned off,
                            output longint unsigned data, input int width,
                            output bit status_ok);
@@ -33,7 +26,6 @@ class result_context_region extends aip_cpu_region;
         status_ok = (off == 0 && width == 32);
     endtask
 
-    // 满足 region 接口的清零操作，不创建额外后台进程。
     virtual task zero_all();
         value = 0;
     endtask
@@ -50,8 +42,7 @@ class result_context_ops;
     static process saved_a_process;
     static int direct_reentrant_entries = 0;
 
-    // 两个独立别名复用此业务：保存上下文、等待、提交非零结果；通过句柄
-    // 二次读取参数确认 BUSY 拒绝没有覆盖本次输入。上下文只存活于本次执行。
+    // 两个别名复用：保存上下文、等待、提交非零结果；二次读参确认 BUSY 拒绝没有覆盖本次输入。
     static task execute(string name, string text, int ns, int code);
         aip_cmd handle;
         aip_cmd_result_context context_handle;
@@ -216,7 +207,6 @@ module test_cmd_result_context;
     int checks = 0;
     int fails = 0;
 
-    // 累积断言，失败时给出稳定标记，最终 fatal 防止 runner 仅检查退出码漏报。
     task automatic check(string name, bit condition);
         checks++;
         if (condition) $display("CMD_RESULT_CONTEXT_CHECK_PASS %s", name);

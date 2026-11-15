@@ -1,8 +1,5 @@
-/* src/c/runtime：SV TCP bridge 的非阻塞 socket、认证及 MHPI Tcl 入口。
- * 本模块拥有进程唯一 listener 和客户端表；仅显式启动时创建 listener，失败不发布半成品。
- * OS fd/auth 属于当前进程，不能把 live socket 的仿真快照当作可恢复外部资源。
- * 客户端由 close/断连路径回收；abort_listener 只回收尚未接受连接的启动失败资源。
- */
+/* SV TCP bridge 的非阻塞 socket、认证与 MHPI Tcl 入口；listener 进程唯一，仅显式启动时创建，失败不发布半成品。
+ * OS fd/auth 属于当前进程：live socket 的仿真快照不是可恢复的外部资源。 */
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -39,19 +36,13 @@ static client_t clients[MAX_CLIENTS];
 static int listen_fd = -1;
 static uint32_t auth_key;
 
-/*
- * The VCS UCLI interpreter is embedded in libvcsucli. It is intentionally
- * resolved at runtime: the socket bridge must still link/run in a plain
- * simv that does not expose the UCLI entry point. Only the single SV socket
- * executor calls this function in production, but the mutex also serializes
- * an accidental second control caller. The returned text is copied before
- * releasing the lock because the MHPI API owns its result storage.
- */
+/* The UCLI interpreter lives in libvcsucli and is resolved at runtime so the bridge still links/runs in a
+ * plain simv without the UCLI entry point. The mutex guards against an accidental second caller; MHPI owns
+ * its result storage, so the text is copied before unlocking. */
 typedef char *(*aip_ucli_tcl_exec_fn)(const char *script);
 static pthread_mutex_t aip_ucli_tcl_lock = PTHREAD_MUTEX_INITIALIZER;
 
-/* 只匹配完整 aip_watch 名称，让公共求值器在原始脚本两侧设置注册标记；
- * 保留原 DPI ABI，不增加会破坏旧 C 对象兼容性的第二个入口。空指针不匹配。 */
+/* 只匹配完整 aip_watch 名称；借公共求值器设置注册标记，从而保留原 DPI ABI（不增加第二个入口）。 */
 static int aip_is_watch_registration(const char *script) {
     static const char name[] = "aip_watch";
     const char *p = script;
@@ -65,8 +56,7 @@ static int aip_is_watch_registration(const char *script) {
            p[i] == '\r' || p[i] == '\n';
 }
 
-/* 在互斥锁内调用宿主 MHPI 并复制结果；返回线程持有的缓冲区，下一次调用覆盖。
- * 空脚本/缺少 UCLI API 返回明确错误；watch 注册标记独立于用户脚本文本，避免拼接转义。 */
+/* 返回值指向本模块缓冲区，下一次调用覆盖。 */
 static const char *sv_socket_eval_tcl_common(const char *script,
                                              int watch_registration) {
     static _Thread_local char result[4096];
@@ -89,13 +79,9 @@ static const char *sv_socket_eval_tcl_common(const char *script,
     }
 
     pthread_mutex_lock(&aip_ucli_tcl_lock);
-    /*
-     * Do not construct a Tcl wrapper around user input here: braces/quotes in
-     * ctx= content would make that an injection and escaping it portably is
-     * error-prone.  The two fixed Tcl calls bracket the original request and
-     * expose a marker consumed only by aip_watch.  Copy the request result
-     * before the cleanup call because MHPI owns a single result buffer.
-     */
+    /* Never wrap user input in Tcl here (braces/quotes in ctx= would allow injection). Two fixed calls
+     * bracket the original request and expose a marker read only by aip_watch; the request result is
+     * copied before the cleanup call because MHPI owns a single result buffer. */
     if (watch_registration) {
         (void)exec_tcl("set ::_aip_watch_tcp_mode 1");
     }
@@ -118,12 +104,11 @@ static const char *sv_socket_eval_tcl_common(const char *script,
     return result;
 }
 
-/* 对外 DPI 求值入口：识别 watch 注册后转交公共求值器，返回值生命周期同上。 */
 const char *sv_socket_eval_tcl(const char *script) {
     return sv_socket_eval_tcl_common(script, aip_is_watch_registration(script));
 }
 
-/* 仅在首次 listener 完整初始化成功后清空客户端槽；不得对活动 listener 重复调用。 */
+/* 仅在首次 listener 初始化成功后调用；不得对活动 listener 重复调用。 */
 static void init_clients() {
     int i;
     for (i = 0; i < MAX_CLIENTS; i++) {
@@ -135,7 +120,6 @@ static void init_clients() {
     }
 }
 
-/* 查找尚未占用的槽，表满返回 -1；不改变槽状态，调用者负责初始化。 */
 static int find_free_client() {
     int i;
     for (i = 0; i < MAX_CLIENTS; i++) {
@@ -144,7 +128,7 @@ static int find_free_client() {
     return -1;
 }
 
-/* 只查找活动槽，失效或未知 fd 返回 -1，避免使用断开连接留下的旧记录。 */
+/* 只查活动槽，避免命中断连遗留的旧记录。 */
 static int find_client_by_fd(int fd) {
     int i;
     for (i = 0; i < MAX_CLIENTS; i++) {
@@ -153,19 +137,18 @@ static int find_client_by_fd(int fd) {
     return -1;
 }
 
-/* 检查 fd 是否仍在活动客户端表中，供 SV 在异步命令完成后决定是否可以回包。 */
+/* 供 SV 在异步命令完成后判断是否还能回包。 */
 int sv_socket_is_valid_fd(int fd) {
     return (find_client_by_fd(fd) != -1) ? 1 : 0;
 }
 
-/* 返回当前连接认证位；未知 fd 返回 -1，绝不视为已认证。 */
+/* 未知 fd 返回 -1，绝不视为已认证。 */
 int sv_socket_is_authenticated(int fd) {
     int idx = find_client_by_fd(fd);
     return (idx == -1) ? -1 : clients[idx].authenticated;
 }
 
-/* 解析十进制 32 位 key 并与进程 key 比较；未知连接、空串、尾随字符或越界值失败。
- * SV 已剥离外围空白；成功只设置当前连接认证位，不影响其它客户端。 */
+/* 十进制 32 位 key，空串/尾随字符/越界均失败；成功只设置当前连接的认证位。 */
 int sv_socket_authenticate(int fd, const char *key_text) {
     int idx = find_client_by_fd(fd);
     char *end = NULL;
@@ -180,19 +163,19 @@ int sv_socket_authenticate(int fd, const char *key_text) {
     return 1;
 }
 
-/* 读取当前进程 key 的数值表示；listener 成功创建前为零。 */
+/* listener 创建成功前为 0。 */
 unsigned int sv_socket_get_auth_key(void) {
     return (unsigned int)auth_key;
 }
 
-/* 以十进制供 SV 展示认证 key；静态缓冲区由本模块持有，下次调用覆盖。 */
+/* 静态缓冲区，下次调用覆盖。 */
 const char *sv_socket_get_auth_key_text(void) {
     static char text[16];
     snprintf(text, sizeof(text), "%u", (unsigned int)auth_key);
     return text;
 }
 
-/* 优先从系统随机源生成非零 key；读取失败时以时间/进程数据退化生成，不持有文件。 */
+/* 优先用系统随机源；失败时退化为时间/进程数据。 */
 static uint32_t generate_auth_key(void) {
     uint32_t value = 0;
     FILE *random_file = fopen("/dev/urandom", "rb");
@@ -209,9 +192,7 @@ static uint32_t generate_auth_key(void) {
     return value == 0 ? 1U : value;
 }
 
-/* 显式创建进程唯一 listener。已存在时拒绝且不改 clients/auth；失败关闭本次局部 fd。
- * 完整 bind/listen 成功后才发布全局句柄和新认证 key，允许未成功的调用安全重试。
- */
+/* 已有 listener 时拒绝且不改 clients/auth；bind/listen 全部成功后才发布句柄与新 key，失败可安全重试。 */
 int sv_socket_init(const char* ip, int port) {
     int candidate_fd;
     int opt = 1;
@@ -265,9 +246,7 @@ failed:
     return -1;
 }
 
-/* 仅供 SV 启动后端口查询失败回收。必须匹配本进程刚创建的 listener，
- * 不能拿任意数字关闭其它资源；已有客户端则拒绝，避免变成通用 stop/restart 接口。
- */
+/* 仅供 SV 在端口查询失败时回收刚创建的 listener：fd 必须匹配且无客户端，不是通用 stop/restart 接口。 */
 void sv_socket_abort_listener(int fd) {
     int i;
     if (fd < 0 || fd != listen_fd) return;
@@ -279,8 +258,7 @@ void sv_socket_abort_listener(int fd) {
     auth_key = 0;
 }
 
-/* 查询实际绑定端口，尤其供 port=0 的动态分配使用；错误/非 IPv4 返回 -1。
- * 调用者必须在发布 endpoint 前查询成功，失败则回收本次尚未使用的 listener。 */
+/* 查询实际绑定端口（port=0 动态分配）；错误或非 IPv4 返回 -1。 */
 int sv_socket_get_bound_port(int fd) {
     struct sockaddr_in addr;
     socklen_t addr_len = sizeof(addr);
@@ -295,21 +273,19 @@ int sv_socket_get_bound_port(int fd) {
     return (int)ntohs(addr.sin_port);
 }
 
-/* 非阻塞接受连接并分配未认证客户端槽；-2 表示暂无连接，-3 表满，-1 系统错误。
- * 表满立即关闭本次新 fd；成功后客户端表持有该 fd，直到断连/显式 close。 */
+/* 返回 -2 暂无连接、-3 表满（新 fd 立即关闭）、-1 系统错误；成功后客户端表持有该 fd。 */
 int sv_socket_accept_nonblock(int listen_fd) {
     struct sockaddr_in client_addr;
     socklen_t len = sizeof(client_addr);
     int conn_fd = accept(listen_fd, (struct sockaddr*)&client_addr, &len);
     
     if (conn_fd < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return -2; // 无新连接
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return -2;
         else {
             perror("accept failed");
-            return -1; // 错误
+            return -1;
         }
     }
-    // 设置客户端fd为非阻塞
     int flags = fcntl(conn_fd, F_GETFL, 0);
     fcntl(conn_fd, F_SETFL, flags | O_NONBLOCK);
     
@@ -319,7 +295,7 @@ int sv_socket_accept_nonblock(int listen_fd) {
 #ifdef DEBUG_SOCKET
         printf("[DPI DEBUG] no free client slot, close fd=%d\n", conn_fd);
 #endif
-        return -3; // 客户端满
+        return -3;
     }
     clients[idx].fd = conn_fd;
     clients[idx].recv_pos = 0;
@@ -332,8 +308,7 @@ int sv_socket_accept_nonblock(int listen_fd) {
     return conn_fd;
 }
 
-/* 从客户端接收缓冲提取一行，剩余数据保留给后续调用；0 表示命令尚不完整。
- * 参数错误、未知连接或断连返回 -1；调用方负责结束 handler 并回收客户端。 */
+/* 提取一行，剩余数据留给后续调用；0 = 命令未完整，-1 = 参数错误/未知连接/断连（调用方回收客户端）。 */
 int sv_socket_recv_nonblock(int fd, char* buff, int maxlen) {
     if (buff == NULL || maxlen <= 0) {
         printf("[DPI ERROR] invalid param: buff=%p, maxlen=%d\n", buff, maxlen);
@@ -362,7 +337,6 @@ int sv_socket_recv_nonblock(int fd, char* buff, int maxlen) {
         } else {
             perror("[DPI ERROR] recv failed");
             close(fd);
-            // 清理客户端状态（关键修复）
             c->active = 0;
             c->fd = -1;
             c->authenticated = 0;
@@ -375,7 +349,6 @@ int sv_socket_recv_nonblock(int fd, char* buff, int maxlen) {
         printf("[DPI DEBUG] client fd=%d closed connection\n", fd);
 #endif
         close(fd);
-        // 清理客户端状态（关键修复）
         c->active = 0;
         c->fd = -1;
         c->authenticated = 0;
@@ -390,7 +363,7 @@ int sv_socket_recv_nonblock(int fd, char* buff, int maxlen) {
            fd, n, c->recv_pos, c->recv_pos, c->recv_buff); // 仅打印有效数据
 #endif
 
-    // ========== 核心修复：用memchr限定查找范围为已接收的字节数 ==========
+    // 只在已接收的 recv_pos 字节内查找换行。
     char *newline = memchr(c->recv_buff, '\n', c->recv_pos);
     if (newline == NULL) {
         return 0;
@@ -399,26 +372,22 @@ int sv_socket_recv_nonblock(int fd, char* buff, int maxlen) {
     *newline = '\0';
     int cmd_len = strlen(c->recv_buff);
     if (cmd_len == 0) {
-        // 空指令，重置缓冲区
         c->recv_pos = 0;
         memset(c->recv_buff, 0, MAX_CMD_LEN);
         return 0;
     }
 
-    // 安全拷贝指令到输出缓冲区
     strncpy(buff, c->recv_buff, maxlen - 1);
     buff[maxlen - 1] = '\0';
 #ifdef DEBUG_SOCKET
     printf("[DPI DEBUG] client fd=%d get full cmd: %s (copied to SV buff)\n", fd, buff);
 #endif
 
-    // 计算剩余未处理的字节数，并移动到缓冲区头部
-    int newline_pos = newline - c->recv_buff; // 换行符的索引位置
+    int newline_pos = newline - c->recv_buff;
     int remain = c->recv_pos - newline_pos - 1;
     if (remain > 0) {
-        // 移动剩余数据到缓冲区开头
         memmove(c->recv_buff, newline + 1, remain);
-        // 清空剩余区域，避免残留
+        // 清零尾部，避免残留
         memset(c->recv_buff + remain, 0, MAX_CMD_LEN - remain);
         c->recv_pos = remain;
 #ifdef DEBUG_SOCKET
@@ -426,7 +395,6 @@ int sv_socket_recv_nonblock(int fd, char* buff, int maxlen) {
                fd, remain, remain, c->recv_buff);
 #endif
     } else {
-        // 无剩余数据，完全重置缓冲区
         c->recv_pos = 0;
         memset(c->recv_buff, 0, MAX_CMD_LEN);
     }
@@ -434,7 +402,6 @@ int sv_socket_recv_nonblock(int fd, char* buff, int maxlen) {
     return cmd_len;
 }
 
-// 封装：检测fd是否可写（非阻塞send前必备）
 static int is_fd_writable(int fd, int timeout_ms) {
     fd_set writefds;
     FD_ZERO(&writefds);
@@ -447,23 +414,21 @@ static int is_fd_writable(int fd, int timeout_ms) {
     int ret = select(fd + 1, NULL, &writefds, NULL, &timeout);
     if (ret < 0) {
         perror("[DPI ERROR] select for writable failed");
-        return 0; // 错误，不可写
+        return 0;
     } else if (ret == 0) {
         printf("[DPI DEBUG] fd=%d writable timeout (%dms)\n", fd, timeout_ms);
-        return 0; // 超时，不可写
+        return 0;
     }
-    return FD_ISSET(fd, &writefds) ? 1 : 0; // 可写返回1
+    return FD_ISSET(fd, &writefds) ? 1 : 0;
 }
 
-/* 为回复附加换行并有限重试发送；本函数持有临时缓冲，所有退出路径释放。
- * 返回已发送字节数或 -1；重试耗尽保留连接，由上层决定后续处理。 */
+/* 附加换行后有限重试发送；返回已发送字节数或 -1。重试耗尽时保留连接，由上层决定。 */
 int sv_socket_send(int fd, const char* msg) {
     if (msg == NULL || strlen(msg) == 0) {
         printf("[DPI ERROR] invalid send msg: %p\n", msg);
         return -1;
     }
 
-    // 先校验fd是否有效
     int idx = find_client_by_fd(fd);
     if (idx == -1) {
         printf("[DPI ERROR] client fd=%d not found (send failed)\n", fd);
@@ -484,32 +449,30 @@ int sv_socket_send(int fd, const char* msg) {
 #endif
 
     size_t total_sent = 0;
-    const int MAX_RETRY = 50;    // 最多重试50次
+    const int MAX_RETRY = 50;
     const int RETRY_INTERVAL = 10; // 每次重试间隔10ms（总超时50*10=500ms）
     int retry = 0;
 
     while (total_sent < total_len && retry < MAX_RETRY) {
-        // 第一步：检测fd是否可写（避免盲目send导致EAGAIN）
+        // 先确认可写，避免盲目 send 得到 EAGAIN。
         if (!is_fd_writable(fd, RETRY_INTERVAL)) {
             retry++;
             continue;
         }
 
-        // 第二步：可写时调用send
         ssize_t n = send(fd, buff + total_sent, total_len - total_sent, MSG_NOSIGNAL);
         if (n < 0) {
-            // 区分EAGAIN（暂时失败）和真错误（永久失败）
+            // EAGAIN 为暂时失败，其余为永久失败。
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
                 printf("[DPI DEBUG] fd=%d send EAGAIN, retry=%d/%d\n", fd, retry, MAX_RETRY);
                 retry++;
-                usleep(RETRY_INTERVAL * 1000); // 等待10ms重试
+                usleep(RETRY_INTERVAL * 1000);
                 continue;
             } else {
                 // 真错误（如客户端主动断开：ECONNRESET），才关fd
                 perror("[DPI ERROR] send failed (fatal)");
                 free(buff);
                 close(fd);
-                // 清理状态
                 clients[idx].active = 0;
                 clients[idx].fd = -1;
                 clients[idx].authenticated = 0;
@@ -520,7 +483,6 @@ int sv_socket_send(int fd, const char* msg) {
         } else if (n == 0) {
             retry++;
             usleep(RETRY_INTERVAL * 1000);
-            // 优化后的日志：记录每次重试和最终耗时
 #ifdef DEBUG_SOCKET
             printf("[DPI DEBUG] fd=%d send EAGAIN, retry=%d/%d, elapsed=%dms\n", 
                 fd, retry, MAX_RETRY, retry*RETRY_INTERVAL);
@@ -528,12 +490,10 @@ int sv_socket_send(int fd, const char* msg) {
             continue;
         }
 
-        // 发送成功，累计字节数
         total_sent += n;
-        retry = 0; // 重置重试次数
+        retry = 0;
 #ifdef DEBUG_SOCKET
         printf("[DPI DEBUG] fd=%d sent %zd bytes, total_sent=%zu/%zu\n", fd, n, total_sent, total_len);
-        // 发送成功后：
         printf("[DPI DEBUG] fd=%d send success, total_retry=%d, total_elapsed=%dms\n", 
             fd, retry, retry*RETRY_INTERVAL);
 #endif
@@ -541,7 +501,7 @@ int sv_socket_send(int fd, const char* msg) {
 
     free(buff);
 
-    // 重试耗尽仍未发送完成：仅警告，不关闭fd（留给后续处理）
+    // 重试耗尽：仅警告，不关闭 fd。
     if (retry >= MAX_RETRY) {
         printf("[DPI WARNING] fd=%d send retry exhausted (%d times), sent %zu/%zu bytes (not close fd)\n",
                fd, MAX_RETRY, total_sent, total_len);
@@ -559,7 +519,6 @@ void sv_socket_close(int fd) {
         printf("[DPI DEBUG] close client fd=%d\n", fd);
 #endif
         close(fd);
-        // 确保状态清理
         clients[idx].active = 0;
         clients[idx].fd = -1;
         clients[idx].authenticated = 0;

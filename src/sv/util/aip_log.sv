@@ -1,23 +1,6 @@
-// ==============================================
-// aip_log — 彩色日志系统 V3.0
-// 所属目录：src/sv/util；由 package 或独立组件入口包含，依赖 uvm_pkg。
-// 静态配置/统计由库持有并贯穿仿真，调用者传入的日志文本和位置不被持久保存。
-// 默认 fatal 经 UVM 报告；不可恢复的配置错误可显式选择 hard_fatal，打印后 $fatal(1)。
-// 特性：彩色分级、仿真时间、文件:行号、级别过滤、通配符、统计
-// 普通 FATAL 桥接 UVM；显式 hard_fatal 直接终止，不受 UVM 报告动作降级影响
-// 无外部依赖（aip_str/aip_time 的简单逻辑已内联），可最先 include
-// 依赖：uvm_pkg
-//
-// 宏用法（双括号内嵌 $sformatf，省去手写）：
-//   `aip_info(("simple message"))
-//   `aip_info(("val=%0d addr=0x%0h", val, addr))
-//   `aip_ninfo(this.name, ("val=%0d", val))     // 带实例名
-//   `aip_uinfo(("msg"))                          // UVM 组件内
-//
-// 配置：
-//   aip_log::set_verbosity(aip_log::DEBUG);
-//   aip_log::set_inst_verbosity("top.dut.*", aip_log::WARNING);
-// ==============================================
+// 彩色分级日志：仿真时间、文件:行号、级别/实例（含通配符）过滤与统计；不依赖 aip_str/aip_time，可最先 include。
+// 普通 FATAL 走 UVM 报告；显式 hard_fatal 打印后直接 $fatal(1)，不受 UVM 报告动作降级影响。
+// 宏用法（双括号内嵌 $sformatf）：`aip_info(("val=%0d", val))、`aip_ninfo(inst, (...))、`aip_uinfo((...))（UVM 组件内）。
 `ifndef AIP_LOG_SV
 `define AIP_LOG_SV
 
@@ -25,7 +8,6 @@ import uvm_pkg::*;
 
 class aip_log;
 
-    // -------------------- 级别定义 --------------------
     typedef enum int {
         FATAL   = 0,
         ERROR   = 1,
@@ -35,7 +17,6 @@ class aip_log;
         TRACE   = 5
     } level_t;
 
-    // -------------------- 配置 --------------------
     static level_t verbosity    = INFO;
     static bit     enable_color = 1;
     static string  time_unit    = "";    // 空=自动从 timescale 推算，可手动 set
@@ -47,10 +28,7 @@ class aip_log;
     typedef struct { string pat; level_t v; } wrule_t;
     static wrule_t wrules[$];
 
-    // -------------------- 统计 --------------------
     static int cnt[level_t] = '{default:0};
-
-    // ==================== 公共 API ====================
 
     static function void set_verbosity(level_t v);
         verbosity = v;
@@ -85,26 +63,19 @@ class aip_log;
         $display("===================");
     endfunction
 
-    // ==================== 核心打印 ====================
-
-    // 格式（参考 UVM）：
-    //   [LEVEL] file(line) @ time unit: msg
-    //   [LEVEL] file(line) @ time unit: inst: msg
-    // 打印并统计一条日志；可选 hard_fatal 仅对 FATAL 有效，绕过过滤和 UVM 降级，
-    // 使解析器不可恢复错误在本次 function 内直接终止。默认值保持现有 aip_fatal 行为。
+    // 格式：[LEVEL] file(line) @ time unit: [inst: ]msg。hard_fatal 仅对 FATAL 有效，绕过过滤与 UVM 降级，
+    // 使解析器的不可恢复错误在本次调用内直接终止。
     static function void log(level_t level, string file, int line, string inst, string msg,
                              bit hard_fatal = 0);
         string out;
         string lvl_s;
         real   now;
 
-        // 1. 级别过滤
         if (!(level == FATAL && hard_fatal) && !is_printable(level, inst)) return;
 
-        // 2. 统计
         cnt[level] = cnt[level] + 1;
 
-        // 3. 级别名（固定 5 字符宽度，对齐）
+        // 级别名固定 5 字符宽，便于对齐。
         case (level)
             FATAL:   lvl_s = "FATAL";
             ERROR:   lvl_s = "ERROR";
@@ -115,7 +86,6 @@ class aip_log;
             default: lvl_s = "?????";
         endcase
 
-        // 4. 仿真时间（自动推算单位，或使用手动设置的单位）
         begin
             string unit_s;
             if (time_unit != "") begin
@@ -126,7 +96,6 @@ class aip_log;
                 now = $realtime;
             end
 
-            // 5. 格式化
             if (inst != "")
                 out = $sformatf("[%s] %s(%0d) @ %.2f %s: %s: %s",
                                 lvl_s, file, line, now, unit_s, inst, msg);
@@ -135,13 +104,12 @@ class aip_log;
                                 lvl_s, file, line, now, unit_s, msg);
         end
 
-        // 6. 颜色输出
         if (enable_color)
             $write("%s%s\033[0m\n", get_color(level), out);
         else
             $write("%s\n", out);
 
-        // 7. hard fatal 直接终止；其他 FATAL 保持原有 UVM 退出流程。
+        // hard fatal 直接终止；其他 FATAL 走 UVM 退出流程。
         if (level == FATAL) begin
             if (hard_fatal)
                 $fatal(1, "%s", msg);
@@ -152,9 +120,6 @@ class aip_log;
         end
     endfunction
 
-    // ==================== 内部方法 ====================
-
-    // 颜色码
     local static function string get_color(level_t level);
         case (level)
             FATAL:   return "\033[31;1m";  // 粗体红
@@ -167,10 +132,7 @@ class aip_log;
         endcase
     endfunction
 
-    // 自动推算 timescale 单位：用 real'(1ns) 判断当前 timescale
-    // -timescale=1ns/1ps → real'(1ns)=1.0    → "ns"
-    // -timescale=1ps/1ps → real'(1ns)=1000.0  → "ps"
-    // -timescale=1us/1ns → real'(1ns)=0.001   → "us"
+    // 用 real'(1ns) 推算 timescale 单位：1.0 → ns，1000.0 → ps，0.001 → us。
     local static function string detect_unit();
         real one_ns = real'(1ns);
         if (one_ns > 5e5)       return "fs";
@@ -195,14 +157,12 @@ class aip_log;
         endcase
     endfunction
 
-    // 检查字符串是否含通配符
     local static function bit has_wildcard(string s);
         foreach (s[i])
             if (s[i] == "*" || s[i] == "?") return 1;
         return 0;
     endfunction
 
-    // 级别过滤
     local static function bit is_printable(level_t level, string inst);
         level_t threshold;
 
@@ -250,8 +210,7 @@ class aip_log;
 
 endclass
 
-// ========================== 宏定义 ==========================
-// --- 无实例名 ---
+// 无实例名
 `define aip_fatal(args)   aip_log::log(aip_log::FATAL,   `__FILE__, `__LINE__, "", $sformatf args)
 `define aip_error(args)   aip_log::log(aip_log::ERROR,   `__FILE__, `__LINE__, "", $sformatf args)
 `define aip_warning(args) aip_log::log(aip_log::WARNING, `__FILE__, `__LINE__, "", $sformatf args)
@@ -259,7 +218,7 @@ endclass
 `define aip_debug(args)   aip_log::log(aip_log::DEBUG,   `__FILE__, `__LINE__, "", $sformatf args)
 `define aip_trace(args)   aip_log::log(aip_log::TRACE,   `__FILE__, `__LINE__, "", $sformatf args)
 
-// --- 带实例名（inst 在前，args 在后）---
+// 带实例名（inst 在前，args 在后）
 `define aip_nfatal(inst, args)   aip_log::log(aip_log::FATAL,   `__FILE__, `__LINE__, inst, $sformatf args)
 `define aip_nerror(inst, args)   aip_log::log(aip_log::ERROR,   `__FILE__, `__LINE__, inst, $sformatf args)
 `define aip_nwarning(inst, args) aip_log::log(aip_log::WARNING, `__FILE__, `__LINE__, inst, $sformatf args)
@@ -267,7 +226,7 @@ endclass
 `define aip_ndebug(inst, args)   aip_log::log(aip_log::DEBUG,   `__FILE__, `__LINE__, inst, $sformatf args)
 `define aip_ntrace(inst, args)   aip_log::log(aip_log::TRACE,   `__FILE__, `__LINE__, inst, $sformatf args)
 
-// --- UVM 组件内（自动取 get_full_name()）---
+// UVM 组件内（自动取 get_full_name()）
 `define aip_ufatal(args)   aip_log::log(aip_log::FATAL,   `__FILE__, `__LINE__, get_full_name(), $sformatf args)
 `define aip_uerror(args)   aip_log::log(aip_log::ERROR,   `__FILE__, `__LINE__, get_full_name(), $sformatf args)
 `define aip_uwarning(args) aip_log::log(aip_log::WARNING, `__FILE__, `__LINE__, get_full_name(), $sformatf args)

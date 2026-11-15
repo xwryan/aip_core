@@ -9,11 +9,8 @@ module test_cmdline_struct_schema_lifecycle;
     static string last_root;
     static int last_default_size;
     static int last_max_size;
-    // Keep a genuinely runtime argument in each getter so VCS cannot fold the
-    // call away.  The getter itself is passed directly into the public macro;
-    // therefore the counters measure the macro's own argument evaluation.
-    // A second evaluation deliberately returns an invalid value, making a
-    // duplicate call fail before the count assertion can be masked.
+    // The runtime argument keeps VCS from folding the call, so the counters measure the macro's
+    // own argument evaluation; a second evaluation returns an invalid value so duplicates fail.
     static function string get_root_name(input int unsigned runtime_nonce);
       root_calls++;
       if (root_calls == 1)

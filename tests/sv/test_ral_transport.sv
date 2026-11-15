@@ -1,5 +1,4 @@
-// tests/sv：Task4逐拍传输永久回归；依赖真实ralgen fixture及AIP package。
-// driver持有独立物理存储；测试拥有adapter/sequence配置，禁止用mirror作为数据oracle。
+// RAL 逐拍传输回归（真实 ralgen fixture）；driver 持有独立物理存储，禁止以 mirror 作为数据 oracle。
 `include "aip_core_pkg.sv"
 `include "aip_ral_fixture.sv"
 package ral_transport_test_pkg;
@@ -162,7 +161,6 @@ package ral_transport_test_pkg;
         uvm_sequence_item extension;
         int checks;
         function new(string name,uvm_component parent); super.new(name,parent); endfunction
-        // 失败立即终止，完整marker只在所有断言通过后打印。
         function void demand(bit ok,string label0);
             if(!ok) `uvm_fatal("TRANSPORT_ASSERT",label0)
             checks++;
@@ -179,7 +177,6 @@ package ral_transport_test_pkg;
         virtual function void connect_phase(uvm_phase phase);
             drv.seq_item_port.connect(sqr.seq_item_export);
         endfunction
-        // 执行并返回操作对象，保留status/value以及raw分类结果供独立断言。
         task operate(bit read0,bit reg0,bit raw0,uvm_reg_data_t value,
                      output transport_operation op);
             op=new(); op.memory0=model.LEAF.RAM; op.register0=model.LEAF.WIDE;

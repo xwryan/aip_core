@@ -1,6 +1,4 @@
-// tests/sv：使用真实 VCS checkpoint 与 AIP loader 验证当前进程 CLI 的恢复来源。
-// 依赖 aip_core_pkg；本测试拥有保存配置、schema 和诊断命令，快照保存这些对象。
-// Tcl 显式传期望 profile，不从待测 CLI 获取期望；失败统一 fatal，由 runner 检查完成标记。
+// 用真实 VCS checkpoint 与 AIP loader 验证恢复后 CLI 的来源；期望 profile 由 Tcl 显式传入，不从待测 CLI 获取。
 `include "aip_core_pkg.sv"
 
 // 嵌套动态成员使测试同时覆盖 schema 的索引扫描及完整键查找，而非仅标量读取。
@@ -19,7 +17,7 @@ class ckpr_state;
     static int saved_count;
     static int init_calls;
 
-    // 仅时间零初始化业务变量。源码来源必须仍是 UVM singleton，不能提前分配刷新对象。
+    // 仅时间零调用；此时来源须仍是 UVM singleton，不能提前分配刷新对象。
     static function void initialize();
         int count;
         if (aip_cmdline_source::get() != uvm_cmdline_processor::get_inst())
@@ -30,14 +28,13 @@ class ckpr_state;
         $display("CKPR_INIT count=%0d calls=%0d", count, init_calls);
     endfunction
 
-    // 统一检查一个无随机输入的条件；消息标明具体行为，失败不允许生成阶段继续保存快照。
+    // 失败即 fatal，生成阶段不能带错继续保存快照。
     static function void require(bit condition, string message);
         if (!condition) $fatal(1, "CKPR_FAIL %s", message);
     endfunction
 
-    // 期望来自 Tcl：A/B/C/N 对应基准/变更/链式恢复/缺参，saved 指保存对象应来自哪个 profile。
-    // source=private 检查恢复后独占句柄；held 检查快照内已有 override 的优先级。
-    // 首次 getter 前后 RNG 必须相同；具体宏随机算法由既有固定 seed 回归覆盖。
+    // profile A/B/C/N = 基准/变更/链式恢复/缺参；saved = 保存对象应来自的 profile；
+    // source=private 检查恢复后的独占句柄，held 检查快照内已有 override 的优先级；首次 getter 不得消耗 RNG。
     static task sample(string profile, string saved, string source_kind, int expected_held);
         int count, dupe, newonly, oldonly, choice, held;
         string label, empty;
@@ -117,9 +114,8 @@ class ckpr_state;
     endtask
 endclass
 
-// 手工注册仅为传递四个期望字段，业务检查仍通过公开 AIP 宏；每次结果由命令对象单独持有。
+// 手工注册只为传递四个期望字段，业务检查仍走公开 AIP 宏。
 class ckpr_command extends aip_cmd;
-    // 从本次 Tcl 参数解析期望并同步执行采样；非法 profile 会 fatal，成功设置明确结果标记。
     task cmd_exec();
         string profile, saved, source_kind, held;
         profile = aip_cmd::get_arg(args_in, "profile");
@@ -131,7 +127,6 @@ class ckpr_command extends aip_cmd;
         status = 0;
     endtask
 
-    // 创建常驻注册项；命令名及对象随快照恢复，不依赖恢复后重新跑初始化。
     function new(string name); super.new(name); endfunction
     static ckpr_command instance = new("ckpr_sample");
 endclass

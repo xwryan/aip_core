@@ -117,7 +117,6 @@ class user_env extends uvm_env;
     endfunction
 endclass
 
-// The RED phase intentionally references the new macro before it exists.
 `aip_cmd_user_seq(user_seq_run, user_seq, user_vsqr::seqr)
 
 class user_state_cmd extends aip_cmd;

@@ -38,7 +38,7 @@ int main(void) {
     cmd_init(&fake_mbox);
     cmd_register("echo", do_echo);
 
-    /* T1: sync dispatch clears cmd_flag (regression for v1 bug) */
+    /* T1: sync dispatch clears cmd_flag */
     write_cmd("echo s=hello");
     cmd_poll_once();
     assert(fake_mbox.cmd_flag == 0);

@@ -1,16 +1,10 @@
-// src/sv/cpu_mem：封装固件镜像装载和 CPU 启动就绪轮询，依赖 aip_cpu_mem 的
-// ROM/RAM region、UVM HDL backdoor、日志及 aip_cmd 逐调用结果上下文。
-// aip_cpu_loader 是 TB 所有的多实例业务对象；default facade 仅借用其句柄，
-// set() 由 TB 在命令执行前完成，运行中不得重绑/销毁 loader 或 region。
-// default 命令结果随当前调用存活；镜像统一从 load_image() 进入，按 start
-// 和 format 自动处理 ROM/RAM/packed40。每个地址只允许被统一 loader 成功写一次，
-// 重叠会 fatal 终止仿真；cpu_wait 仍复用该 loader 的 cpu facade。
+// 固件镜像装载与 CPU 启动就绪轮询：镜像统一经 load_image() 按 start/format 自动处理 ROM/RAM/packed40，每个地址只允许
+// 成功写一次，重叠即 fatal。loader 归 TB 所有（可多实例），set() 须在命令执行前完成，运行中不得重绑/销毁 loader 或 region。
 `ifndef AIP_CPU_LOADER_SV
 `define AIP_CPU_LOADER_SV
 
 import uvm_pkg::*;
 
-// 保留业务层与命令层分离，多个 TB/CPU 可各自持有 loader，无需命令全局实例。
 class aip_cpu_loader;
     aip_cpu_mem            cpu;
 
@@ -22,7 +16,6 @@ class aip_cpu_loader;
     bit [7:0]            staged_data[$];
     bit                  image_error;
 
-    // 借用 CPU 内存 facade；ROM/RAM region 由 TB 在 cpu map 上注册。
     function new(aip_cpu_mem c);
         cpu             = c;
         image_error     = 0;
@@ -129,7 +122,7 @@ class aip_cpu_loader;
         end
     endtask
 
-    // 解码一个十六进制字符；非法字符输出零并返回 0，供行解析器识别字段边界。
+    // 非法字符返回 0，供行解析器识别字段边界。
     function automatic bit packed40_hex_nibble(input byte ch, output int nibble);
         if (ch >= "0" && ch <= "9") begin
             nibble = ch - "0";
@@ -425,10 +418,8 @@ class aip_cpu_loader;
 
 endclass
 
-// 静态 facade 为 Tcl 注册和 SV 直接调用提供同一个 load_image(file,start,format)
-// 入口。命令内复用当前调用上下文；直接 SV 调用建立临时兼容 scope 并在返回时
-// 释放。CPU 区域映射和地址占用表由 aip_cpu_mem 统一拥有，多个 loader 共享同一
-// map 时也会使用同一份重叠检查。cpu_wait 仍是独立的只读轮询命令。
+// 静态 facade：Tcl 注册与 SV 直接调用共用 load_image(file,start,format)；区域映射与地址占用表由 aip_cpu_mem 统一拥有，
+// 共享同一 map 的多个 loader 也共用重叠检查。
 class aip_cpu_loader_default;
     static aip_cpu_loader inst = null;
 
@@ -437,8 +428,7 @@ class aip_cpu_loader_default;
         inst = L;
     endtask
 
-    // 检查默认对象已绑定；失败向当前命令/直接调用 scope 写诊断并返回 0。
-    // 成功是纯检查，保持旧行为，不创建 scope 或改写已有全局结果。
+    // 失败向当前命令/直接调用 scope 写诊断并返回 0；成功时不创建 scope、不改写全局结果。
     static function bit check(string ctx);
         if (inst == null) begin
             aip_cmd_result_context result_scope;
@@ -474,10 +464,8 @@ class aip_cpu_loader_default;
         aip_cmd::end_compat_result_scope(result_scope);
     endtask
 
-    // cpu_wait 直接 backdoor 轮询 (read32(addr)&mask)==(expected&mask)，mask=0 表示全位。
-    // 不依赖 CPU mailbox 状态，适用于固件 boot-ready magic；每 100 个当前时间单位
-    // 采样，保留既有 1ns 编译假设。成功/超时通过逐调用上下文返回，typed 宏默认
-    // 成功不得覆盖此结果；wait=0 不关闭这里的业务 timeout_ns。
+    // backdoor 轮询 (read32(addr)&mask)==(expected&mask)（mask=0 表示全位），不依赖 mailbox，适用于 boot-ready magic；
+    // 每 100 个当前时间单位采样（沿用 1ns 编译假设）。结果经逐调用上下文返回，typed 宏默认成功不得覆盖；wait=0 不关闭 timeout_ns。
     static task wait_value(int addr, int expected, int mask, int timeout_ns);
         longint unsigned addr_u;
         bit [31:0] exp_u, mask_u, data;

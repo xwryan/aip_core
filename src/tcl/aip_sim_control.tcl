@@ -1,13 +1,6 @@
-# ============================================================================
-# src/tcl：AIP 同会话仿真推进与暂停控制。
-#
-# 本文件先于 aip_cmd.tcl 加载，只依赖 Tcl 和 VCS 的原生命令，不改写用户的
-# source/for/proc/continue，也不替换 onbreak。暂停使用原生 pause/resume 保存
-# 活跃 Tcl 调用栈；绝不通过重新 source 文件或重新发送命令来“恢复”。
-# 所有期限均由 senv time 的原始值换算为整数 fs，禁止使用格式化显示时间。
-# 正常调用独占 depth/mode/pending_id；暂停中的有限调试推进仅拥有 debug_active，
-# 不释放原请求、不覆盖结果。ACK 清理只清已匹配请求的 trigger/len，防止重发。
-# ============================================================================
+# AIP 同会话仿真推进与暂停控制（先于 aip_cmd.tcl 加载）：用原生 pause/resume 保存活跃 Tcl 调用栈，绝不靠重新
+# source 或重发命令“恢复”；不改写用户 source/for/proc/continue，也不替换 onbreak。期限一律由 senv time 原始值换算为整数 fs。
+# 正常调用独占 depth/mode/pending_id；暂停中的有限调试推进只拥有 debug_active，不释放原请求、不覆盖结果。
 
 # 重复 source 或 restore 后重载只补缺省字段，不擅自清除未消费的 watch 事件。
 # restore 的过期深度/在途请求由显式 _aip_control_reconcile 核对真实桥接槽。
@@ -80,9 +73,8 @@ proc _aip_control_scalar {raw} {
     return $result
 }
 
-# 状态快照不修改控制层。watch_paused 仅表示本模块显式 pause；原生 -keep
-# 内部的 Ctrl+C 暂停由真实执行帧识别。debug_event 保存最近调试中断的原因，
-# events 仍属于正常 watch 调度；active 本身不能证明当前正在 pause% 求值。
+# 只读快照。watch_paused 仅表示本模块显式 pause（原生 -keep 内的 Ctrl+C 暂停由执行帧识别）；
+# active 本身不能证明当前正在 pause% 求值。
 proc aip_sim_status {} {
     set status $::_aip_control_state
     dict set status pause_requested [expr {[llength [dict get $status events]] != 0}]
@@ -90,9 +82,7 @@ proc aip_sim_status {} {
     return $status
 }
 
-# Keep the AIP Tcl diagnostics on one palette, matching aip_cmd.tcl's existing
-# ANSI conventions. This helper is defined by the first-loaded control module,
-# so watch/bridge messages do not each carry their own color configuration.
+# Shared ANSI palette for AIP diagnostics (defined here because this module loads first).
 proc _aip_colorize {line color} {
     switch -- $color {
         green  { set code "\033\[32m" }
@@ -115,14 +105,9 @@ proc _aip_control_assert_idle {operation} {
     }
 }
 
-# Registering a watch is a read-only control-plane operation: it only reads
-# the current HDL value and installs a VCS stop condition.  A TCP request may
-# arrive while a user Tcl script is inside its ordinary `run`; in that case
-# the run owner must remain untouched, but rejecting the registration as BUSY
-# makes remote monitoring unusable.  The TCP bridge marks this narrow path
-# with ::_aip_watch_tcp_mode.  No simulation-time advance, bridge handshake,
-# force or pause is permitted by this exception; all other callers retain the
-# normal idle guard.
+# Watch registration is read-only (reads the HDL value, installs a stop condition). A TCP request may arrive
+# while a user script is inside `run`; ::_aip_watch_tcp_mode marks that narrow path so registration is not
+# rejected as BUSY. No advance, handshake, force or pause is allowed by this exception.
 proc _aip_control_assert_watch_registration_allowed {} {
     if {[dict get $::_aip_control_state depth] == 0 &&
         [dict get $::_aip_control_state pending_id] eq ""} {
@@ -139,10 +124,8 @@ proc _aip_control_assert_watch_registration_allowed {} {
         "AIP_CONTROL_BUSY: cannot aip_watch while a simulation command is suspended or pending; use native resume"
 }
 
-# 检查真实暂停执行帧，而非 info level 或 depth。VCS 的 pause% 以 uplevel #0
-# 求值，普通回调也可能在全局层执行；只有活跃 AIP owner 之后的原生
-# ::synopsys::pause 才证明保留了交互暂停栈。暂停内部再次进入 native run 的
-# 回调不属于提示符，必须拒绝；未知 VCS 栈布局保守返回假，不放宽所有权。
+# 检查真实暂停执行帧而非 info level/depth：pause% 以 uplevel #0 求值，普通回调也可能在全局层执行，只有活跃 AIP owner
+# 之后的 ::synopsys::pause 才证明保留了交互暂停栈；暂停内再次进入 native run 的回调须拒绝，未知栈布局保守返回假。
 proc _aip_control_is_paused_context {} {
     if {[dict get $::_aip_control_state depth] == 0 ||
         [dict get $::_aip_control_state debug_active]} { return 0 }
@@ -192,10 +175,8 @@ proc _aip_control_pending_end {id} {
     dict set ::_aip_control_state pending_id {}
 }
 
-# AIP 自己拥有活动推进栈时，native stop -command 回调只排队，禁止在
-# 静音层/回调栈中重入 pause；推进层返回后再消费事件，才能补完有限 run。
-# 空闲自主推进路径由 aip_watch 直接调用 pause，不经过此队列。即使只通知
-# 不暂停，也要标记事件，推进层才知道应补完被 watch 截断的 run。
+# AIP 自己拥有活动推进栈时，native stop 回调只排队（禁止在静音层/回调栈中重入 pause），推进层返回后再消费，
+# 才能补完有限 run；只通知的事件也要标记，推进层才知道应补完被截断的 run。空闲自主推进由 aip_watch 直接 pause。
 proc _aip_control_signal_watch {reason should_pause} {
     if {![string is boolean -strict $should_pause]} {
         return -code error -errorcode {AIP CONTROL ARGUMENT} "AIP_CONTROL_ARGUMENT: should_pause must be boolean"
@@ -203,14 +184,12 @@ proc _aip_control_signal_watch {reason should_pause} {
     dict lappend ::_aip_control_state events [dict create reason $reason pause [expr {!!$should_pause}]]
 }
 
-# 纯暂停事件的简写，供自定义断点回调使用。
 proc _aip_control_signal_pause {reason} {
     _aip_control_signal_watch $reason 1
 }
 
-# 临时 execution trace 只记录原生 resume 被执行，不替换命令、不碰桥接槽。
-# VCS 在无交互输入/EOF 时可能让 pause 以成功码返回；仅检查返回码会让脚本
-# 偷跑，必须以真实 resume 调用作为继续的凭据。trace 仅在本次 pause 存在。
+# 临时 execution trace 只记录原生 resume 被执行：VCS 在无输入/EOF 时可能让 pause 以成功码返回，
+# 仅看返回码会让脚本偷跑，必须以真实 resume 调用为继续凭据。
 proc _aip_control_resume_observed {command code result operation} {
     # enter 太早：resume badarg 会报错，resume -help 虽成功也不恢复。
     # 仅无参原生 resume 的成功 leave 才是有效凭据。
@@ -283,10 +262,8 @@ proc _aip_control_ack_complete {} {
     return [expr {[_aip_control_scalar [get aip_core_pkg::__tcl_result_id]] == $pending}]
 }
 
-# 自动 -keep 只适用于确有交互终端且 VCS 已知支持该选项的会话。native -keep 遇到 batch 的
-# SIGINT+EOF 会自行继续剩余 run，改变旧批处理的中断语义；非TTY保留原生
-# 不带 -keep 的行为。用户显式写 -keep 始终原样尊重，不禁止合法 pipe 输入。
-# 检测使用已有 stdin 描述符，不打开 /dev/tty、不预读/消费任何用户输入。
+# 自动 -keep 只用于确有交互终端且 VCS 支持该选项的会话：batch 下 native -keep 遇 SIGINT+EOF 会自行续跑，
+# 改变旧中断语义。显式 -keep 始终尊重；检测只用已有 stdin，不打开 /dev/tty、不消费用户输入。
 proc _aip_control_detect_keep_support {} {
     if {![dict exists $::_aip_control_state run_keep_support]} {
         dict set ::_aip_control_state run_keep_support unknown
@@ -340,9 +317,8 @@ proc _aip_control_auto_keep {} {
     return [expr {[dict get $::_aip_control_state tty_mode] eq "tty"}]
 }
 
-# 分析支持的原生 run 语法。普通时长、无单位时长、absolute/relative 以及
-# 无限 run 均可保存期限。边沿/源码行/倒退等高级原生模式保持原生参数，
-# 不假装能推导其目标；如 watch 截断这种模式，明确报不支持精确恢复。
+# 普通/无单位时长、absolute/relative 与无限 run 可保存期限；边沿/源码行/倒退等高级模式原样交给原生命令，
+# 若被 watch 截断则明确报不支持精确恢复。
 proc _aip_control_run_plan {arguments {allow_auto_keep 1}} {
     set args $arguments
     set explicit_keep [expr {[lsearch -exact $args -keep] >= 0}]
@@ -423,10 +399,8 @@ proc _aip_control_debug_plan {arguments} {
     return [dict create before $now deadline $deadline]
 }
 
-# 原命令 ACK 后桥循环可能立即重新看到仍被 force 的 trigger；调试推进必须
-# 及时清尾。先严格核对 Tcl owner、真实 result_id 和 cmd_id，再仅清 trigger/
-# len；pending owner、正常返回码/字符串均留给原 caller 在 native resume 后消费。
-# 返回是否已匹配 ACK，用于区分合理的 ACK 截断与无法解释的原生提前停止。
+# 原命令 ACK 后桥循环可能立即重新看到仍被 force 的 trigger，调试推进须及时清尾：严格核对 Tcl owner、真实
+# result_id 与 cmd_id 后只清 trigger/len，pending owner 与返回值留给原 caller。返回是否匹配 ACK。
 proc _aip_control_debug_ack {owner} {
     if {[dict get $::_aip_control_state pending_id] ne $owner} {
         return -code error -errorcode {AIP CONTROL STATE} "AIP_CONTROL_STATE: debug advance lost the original pending owner"
@@ -441,10 +415,8 @@ proc _aip_control_debug_ack {owner} {
     return 1
 }
 
-# 调试期间的新 watch 不能递归 pause 或 resume 原脚本。将本批事件移到
-# debug_event 供状态查询；stop=1 以明确错误返回当前 pause%，通知型事件允许
-# 补完本次有限窗口。prefix_count 个旧事件仍属于外层 drain，必须原样保留；
-# 仅移出调试期间新增事件，避免 native resume 后重复停在已报告的新事件。
+# 调试期间的新 watch 不能递归 pause 或 resume 原脚本：只把调试期间新增的事件移到 debug_event（stop=1 以错误
+# 返回当前 pause%，通知型允许补完窗口）；前 prefix_count 个旧事件属于外层 drain，原样保留。
 proc _aip_control_debug_events {prefix_count} {
     if {[info commands _aip_watch_flush_deferred_output] ne ""} {
         _aip_watch_flush_deferred_output
@@ -463,10 +435,8 @@ proc _aip_control_debug_events {prefix_count} {
     return [llength $events]
 }
 
-# 唯一的保栈调试推进实现。只拥有 debug_active 和局部期限，绝不写外层
-# depth/mode/owner，也不调用 pause/resume/onbreak。ACK/通知可截断原生 run，
-# 其余提前返回（含 Ctrl+C）均报安全中断，不跨过未知断点；TCL_RETURN 等
-# 非局部控制码转成错误，避免调试取消意外展开原脚本。finally 总会解除防重入。
+# 唯一的保栈调试推进实现：只拥有 debug_active 和局部期限，不写外层 depth/mode/owner，不调用 pause/resume/onbreak。
+# ACK/通知可截断原生 run，其余提前返回（含 Ctrl+C）报安全中断；TCL_RETURN 等非局部控制码转成错误，避免展开原脚本。
 proc _aip_control_debug_run {arguments} {
     if {![_aip_control_is_paused_context]} {
         return -code error -errorcode {AIP CONTROL BUSY} "AIP_CONTROL_BUSY: debug advance requires the retained native pause prompt"
@@ -523,10 +493,8 @@ proc _aip_debug_advance {duration} {
     return [_aip_control_debug_run [list $duration]]
 }
 
-# Bridge 初始握手只用于让 UCLI 拿回控制权，内部会执行一次 SV `$stop(0)`。
-# 旧版 aip_cmd.tcl 对这一步使用 `redirect /dev/null`；VCS Q-2020 会把该
-# 内部 stop 打印成 `aip_tcl_bridge.sv: $stop(0)`，而较新 VCS 通常默认静默。
-# 仅恢复启动握手的静默，不包裹用户显式 run，也不吞掉用户调试期间的中断。
+# 初始握手内部执行一次 SV `$stop(0)`；VCS Q-2020 会把它打印成 `aip_tcl_bridge.sv: $stop(0)`（较新 VCS 默认静默），
+# 所以只对启动握手静音，不包裹用户显式 run，也不吞掉调试中断。
 proc _aip_control_quiet_run {args} {
     if {[info commands redirect] eq ""} {
         return [_vcs_run {*}$args]
@@ -550,12 +518,9 @@ proc _aip_control_native_run {args} {
     return [uplevel #0 [linsert $args 0 _vcs_run]]
 }
 
-# 统一仿真推进。bootstrap/checkpoint 保留原始返回语义，不消费 watch、不
-# 自动补跑，也不启用 -keep，兼容仅 +r 时启动握手产生 Tcl return 的路径。
-# run/helper 仅在真实暂停帧内路由到有限调试入口；ACK/存档/内部生命周期
-# 不能借暂停路由重入。原调用的 plan/deadline 保存在未退出的 Tcl 局部栈。
-# run/helper/ack 不使用 redirect：VCS 的 $stop(0) 已安静，而重定向整个
-# native run 会吞掉 Ctrl+C 的 pause% 及用户 onbreak 输出，造成“假死”。
+# 统一仿真推进。bootstrap/checkpoint 保留原始返回语义（不消费 watch、不补跑、不加 -keep），兼容仅 +r 时启动握手的
+# Tcl return；run/helper 仅在真实暂停帧内路由到有限调试入口，ACK/存档不能借此重入。run/helper/ack 不用 redirect：
+# 重定向整个 native run 会吞掉 Ctrl+C 的 pause% 与用户 onbreak 输出，造成“假死”。
 proc _aip_advance {mode args} {
     if {$mode ni {run ack helper bootstrap checkpoint settle}} {
         return -code error -errorcode {AIP CONTROL ARGUMENT} "AIP_CONTROL_ARGUMENT: unknown advance mode '$mode'"
@@ -605,8 +570,7 @@ proc _aip_advance {mode args} {
         while {1} {
             set before [_aip_control_now_fs]
             if {$mode in {ack helper}} {
-                # ACK/helper 推进只服务于 AIP 内部握手/辅助流程；旧版在
-                # 此处重定向，否则 VCS Q-2020 会打印内部 $stop(0)。
+                # ACK/helper 推进仅用于内部握手/辅助流程，静音以免 VCS Q-2020 打印内部 $stop(0)。
                 set result [_aip_control_quiet_run {*}$native]
             } else {
                 set result [_aip_control_native_run {*}$native]
@@ -642,11 +606,9 @@ proc _aip_advance {mode args} {
     }
 }
 
-# restore 会保留 Tcl 全局值但移除命令；重新加载后必须丢掉旧会话深度，并
-# 依据真实 trigger/len 记录无人拥有的旧请求。pending_id 仅代表仍有 Tcl
-# 调用栈负责等待的请求；restore 后的旧槽记为 orphan_id，不能永久锁住
-# aip_recover。原命令层会先检查残留再 settle；这里不 force、不推进、不删 watch。
-# 活跃调用栈内禁止 reconcile，不能将本次真实暂停伪装成“过期状态”。
+# restore 保留 Tcl 全局值但移除命令：重载后丢弃旧会话深度，按真实 trigger/len 把无人等待的旧请求记为 orphan_id
+# （pending_id 只代表仍有调用栈等待的请求），不永久锁住 aip_recover；这里不 force、不推进、不删 watch。
+# 活跃调用栈内禁止 reconcile，不能把真实暂停当成过期状态。
 proc _aip_control_reconcile {} {
     # native pause 的交互层以 uplevel #0 求值，info level 会变成零；但
     # info frame 仍保留外层真实执行帧，必须检查它而不是仅检查逻辑层级。

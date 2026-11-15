@@ -1,13 +1,10 @@
-# tests/tcl：正式保栈暂停黑盒门禁；依赖公开 loader、watch/control API 和真实 cw_seq。
-# Tcl 只拥有断言、watch ID 和临时 legacy 文件；桥缓冲和 UVM 业务由原测试拥有。
-# 交互由 Python PTY runner 驱动；本组不推进暂停现场，命令注入另有独立门禁。
+# 正式保栈暂停黑盒门禁（公开 loader、watch/control API 与真实 cw_seq），由 Python PTY runner 驱动交互；本组不推进暂停现场。
 set ::live_checks 0
 set ::live_effects 0
 set ::live_seq_effects 0
 set ::live_phase setup
 set ::live_watch_ids {}
 
-# 失败必须带独立标记并抛错；runner 同时要求最终 Tcl/SV 双 PASS，不能靠退出码。
 proc live_check {label condition} {
     if {!$condition} { error "AIP_LIVE_FAIL $label" }
     incr ::live_checks

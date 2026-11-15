@@ -1,10 +1,6 @@
-// src/sv/bridge：暂停调试期间的独立命令提交、FIFO 准入及逐 ticket 结果服务。
-// 依赖 aip_cmd 的一次性预约和同步 exec_result；由 Tcl bridge 启动常驻服务，
-// 服务拥有请求快照、32 个结果槽和执行线程，不借用普通 __tcl_* 请求/ACK。
-// 调用方显式 release 终态 ticket 才回收槽；单调 ticket 永不因槽复用而重用。
-// 此层不调用 $stop、不修改原 Tcl continuation、不持有 UVM objection；外层
-// bridge 生命周期决定服务寿命。超时按提交后的绝对仿真时间计算，暂停不计时。
-// 为避免破坏在途 driver/事务，运行中超时仅标记，不 kill；完成后才成为终态。
+// 暂停调试期间的独立命令提交、FIFO 准入与逐 ticket 结果服务：常驻服务（由 Tcl bridge 启动）持有请求快照、32 个结果槽
+// 和执行线程，不借用普通 __tcl_* 请求/ACK，不调用 $stop、不持有 objection。调用方显式 release 终态 ticket 才回收槽，
+// ticket 单调永不重用；超时按提交后的绝对仿真时间计算，运行中超时只标记不 kill（避免破坏在途 driver/事务）。
 `ifndef AIP_INJECT_BRIDGE_SV
 `define AIP_INJECT_BRIDGE_SV
 
@@ -50,8 +46,7 @@ typedef enum int {
     AIP_INJECT_RUNNING_TIMEOUT = 6
 } aip_inject_state_e;
 
-// 每次提交单独分配对象；command/handle/token/ticket 构造后不替换。仅服务
-// 更新生命周期字段，普通命令始终写自己的 exec_result 局部输出。
+// 每次提交单独分配；command/handle/token/ticket 构造后不变，服务只更新生命周期字段。
 class aip_inject_job;
     longint unsigned ticket;
     int slot;
@@ -66,7 +61,6 @@ class aip_inject_job;
     realtime started_at;
     realtime finished_at;
 
-    // 快照完整请求和借用的注册 handle；预约只在容量/参数检查通过后建立。
     function new(longint unsigned id, int index, string request,
                  aip_cmd command_handle, int unsigned limit_ns);
         ticket = id;
@@ -171,9 +165,8 @@ class aip_inject_bridge;
         return 1;
     endfunction
 
-    // 普通命令暂停转接仍由核心解析 wait，避免 Tcl 重组逗号/brace/quote
-    // 参数改变业务原文。op4 仅剥离现有框架控制字段，实际 job 始终同步执行；
-    // wait=0 能力检查与普通 exec_result 一致，返回 wait 标志供 Tcl 决定等待。
+    // 暂停转接的普通命令仍由核心解析 wait（避免 Tcl 重组参数改变原文）；op4 只剥离框架控制字段，job 始终同步执行，
+    // 返回 wait 标志供 Tcl 决定是否等待。
     static function bit normalize_ordinary(string command, output string normalized,
                                            output bit wait_for_done, output string text);
         string name, args, user_args;

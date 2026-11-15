@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# tests/socket：编译显式监听回归，所有 simv/csrc/日志/快照保留在独立 mktemp 目录。
-# 依赖 VCS 主机环境与 Python3；本脚本不清理仓库或其它仿真进程，失败输出编译诊断。
+# 编译显式监听回归；simv/csrc/日志/快照均放独立 mktemp 目录，不清理仓库或其它仿真进程。
 set -euo pipefail
 socket_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 export AIP_CORE="$socket_root"

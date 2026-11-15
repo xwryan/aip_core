@@ -1,6 +1,4 @@
-// tests/sv：寄存器命令的参数/位宽/错误回传回归，不依赖具体总线 VIP。
-// 依赖完整 aip_core_pkg；test 拥有 sequencer，假 sequence 只保存独立寄存器值，
-// exec_result 覆盖真实命令派发与 launch；PCIe 引脚/Completion 另由 Intel 集成测试验证。
+// 寄存器命令的参数/位宽/错误回传回归，不依赖具体总线 VIP；PCIe 引脚/Completion 由 Intel 集成测试另行验证。
 `include "aip_core_pkg.sv"
 
 // 宽标量假后端让解析结果独立可查；未实现总线，不应拿本测试证明 PCIe 时序。
@@ -18,10 +16,9 @@ class reg_wide_seq extends uvm_sequence;
     static int unsigned	last_mask;
     static int unsigned	last_len;
 
-    // 工厂创建独立命令对象，寄存器关联数组由此测试类持有至仿真结束。
     function new(string name = "reg_wide_seq"); super.new(name); endfunction
 
-    // 保存字段并模拟可处理业务错误，用于检查宏不会把失败覆盖为 OK。
+    // 模拟可处理的业务错误，检查宏不会把失败覆盖为 OK。
     task body();
         runs++;
         last_mask = mask;
@@ -46,10 +43,9 @@ class reg_legacy_seq extends uvm_sequence;
     longint unsigned	  rdata;
     static int	         runs;
 
-    // 仅建立标准 UVM sequence 对象，旧用户无需新增任何错误字段。
     function new(string name = "reg_legacy_seq"); super.new(name); endfunction
 
-    // 返回原样数据，供测试检查 64 位上边界，统计是否错误启动了超宽访问。
+    // 原样回传，检查 64 位上边界并统计是否误启动超宽访问。
     task body(); runs++; rdata = wdata; endtask
 endclass
 
@@ -58,14 +54,11 @@ class reg_policy_seq extends reg_wide_seq;
     `uvm_object_utils(reg_policy_seq)
     bit	check_read_data = 1;
     static bit	last_check;
-    // 工厂构造；状态独立于旧后端字段契约。
     extern function new(string name = "reg_policy_seq");
 
-    // 保存本次策略后执行原有假寄存器后端。
     extern task body();
 endclass
 
-// 新注册的策略对象只借用父类假寄存器存储，不改变旧注册字段。
 function reg_policy_seq::new(string name = "reg_policy_seq");
     super.new(name);
 endfunction
@@ -91,7 +84,6 @@ class reg_wide_test extends uvm_test;
     `uvm_component_utils(reg_wide_test)
     int	checks;
 
-    // 标准测试构造，检查计数由单一 run_phase 拥有。
     function new(string name, uvm_component parent); super.new(name, parent); endfunction
 
     // 为严格宏提供真实可 grab 的 sequencer，不需要 driver 即可启动无 item 序列。
@@ -100,7 +92,7 @@ class reg_wide_test extends uvm_test;
         reg_wide_context::sqr = uvm_sequencer#(uvm_sequence_item)::type_id::create("sqr", this);
     endfunction
 
-    // 精确比较成功/失败及可选结果，不允许仅凭仿真进程退出码判断测试通过。
+    // 精确比较成功/失败及结果，不能只凭仿真退出码判定通过。
     task command(string text, bit success, string expected = "");
         int	st;
         string	result;
@@ -174,7 +166,6 @@ class reg_wide_test extends uvm_test;
     endtask
 endclass
 
-// 仿真入口只启动测试；所有成功标记由真实命令检查产生。
 module test_reg_wide;
     initial run_test("reg_wide_test");
 endmodule

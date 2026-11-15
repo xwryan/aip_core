@@ -13,7 +13,6 @@
 #include <readline/history.h>
 #include <pwd.h>
 
-// ========== 配置项 ==========
 #define MAX_CMD_LEN    1024
 #define RECONNECT_MAX  3
 #define RECONNECT_DELAY 1000000
@@ -22,28 +21,24 @@
 #define CONNECT_TIMEOUT 3          // 非阻塞connect超时时间（秒）
 #define SELECT_TIMEOUT_MS 200      // select 超时（毫秒），用于强制打印不完整回复
 
-// 颜色宏
 #define COLOR_RED     "\033[31m"
 #define COLOR_GREEN   "\033[32m"
 #define COLOR_YELLOW  "\033[33m"
 #define COLOR_BLUE    "\033[34m"
 #define COLOR_RESET   "\033[0m"
 
-// 全局变量
 static char g_server_ip[64] = {0};
 static int  g_server_port = 0;
 static char g_auth_key[64] = {0};
-static int  sock = -1;               // 当前连接的socket
-static volatile int running = 1;      // 控制主循环
+static int  sock = -1;
+static volatile int running = 1;
 static const char *completion_cmds[] = {"quit", "exec", "help", "status", NULL};
 
-// 用于累积未打印回复的静态缓冲区
 static char accum_buf[4096];
 static size_t accum_len = 0;
 
 static int authenticate_socket(int fd);
 
-// ========== 工具函数 ==========
 static int set_socket_nonblock(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
     if (flags == -1) return -1;
@@ -88,7 +83,6 @@ static char* get_history_file_path() {
     return path;
 }
 
-// ========== 非阻塞connect（带超时） ==========
 static int nonblock_connect(const char *ip, int port, int timeout_sec) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
@@ -142,7 +136,6 @@ static int nonblock_connect(const char *ip, int port, int timeout_sec) {
     return sock;
 }
 
-// ========== 重连 ==========
 int reconnect_server() {
     int retry = 0;
     while (retry < RECONNECT_MAX) {
@@ -243,21 +236,18 @@ static int configure_auth_key(int argc, char *argv[]) {
     return 0;
 }
 
-// ========== 打印累积的回复并重绘提示符 ==========
 static void flush_accum_reply() {
     if (accum_len > 0) {
-        accum_buf[accum_len] = '\0';  // 确保终止
+        accum_buf[accum_len] = '\0';
         printf("\n" COLOR_GREEN "[Server Reply] %s" COLOR_RESET "\n", accum_buf);
         fflush(stdout);
         accum_len = 0;
         accum_buf[0] = '\0';
-        // 重绘提示符
         rl_forced_update_display();
     }
 }
 
-// ========== 读取服务器数据并累积（非阻塞）==========
-// 返回值：0 正常，-1 连接关闭或错误
+// 非阻塞读取并累积回复；返回 0 正常，-1 连接关闭或出错。
 static int read_all_server_reply(int fd) {
     if (fd < 0) return -1;
 
@@ -272,7 +262,6 @@ static int read_all_server_reply(int fd) {
             fprintf(stderr, COLOR_RED "[Client ERROR] recv failed: %s" COLOR_RESET "\n", strerror(errno));
             return -1;
         } else if (n == 0) {
-            // 对方关闭连接
             printf(COLOR_YELLOW "[Client INFO] Server disconnected" COLOR_RESET "\n");
             return -1;
         }
@@ -280,34 +269,29 @@ static int read_all_server_reply(int fd) {
         recv_buf[n] = '\0';
         chunk_len = (size_t)n;
 
-        // 追加到累积缓冲区
         if (chunk_len <= sizeof(accum_buf) - 1 - accum_len) {
             memcpy(accum_buf + accum_len, recv_buf, chunk_len);
             accum_len += chunk_len;
             accum_buf[accum_len] = '\0';  // 临时终止以便查找
         } else {
             fprintf(stderr, COLOR_YELLOW "[Client WARNING] Reply too long, truncated" COLOR_RESET "\n");
-            // 缓冲区已满，强制打印
+            // 缓冲区满：先打印已累积内容，当前数据可能截断。
             flush_accum_reply();
-            // 重新开始累积当前数据（可能丢失部分）
             accum_len = chunk_len > sizeof(accum_buf)-1 ? sizeof(accum_buf)-1 : chunk_len;
             memcpy(accum_buf, recv_buf, accum_len);
             accum_buf[accum_len] = '\0';
             break;
         }
 
-        // 检查累积数据中是否包含关键字
         if (strstr(accum_buf, "ERROR:") != NULL || strstr(accum_buf, "OK:") != NULL) {
-            // 找到关键字，认为回复完整，立即打印
+            // 含 ERROR:/OK: 视为回复完整，立即打印；剩余数据属于下一个回复。
             flush_accum_reply();
-            // 打印后继续循环读取可能剩余的数据（这些数据属于下一个回复）
         }
     }
 
     return 0;
 }
 
-// ========== Readline 补全 ==========
 static char *cmd_completion_generator(const char *text, int state) {
     static int list_index, len;
     const char *name;
@@ -330,7 +314,6 @@ static char **cmd_completion(const char *text, int start, int end) {
     return rl_completion_matches(text, cmd_completion_generator);
 }
 
-// ========== Readline 行处理回调 ==========
 static void handle_line(char *line) {
     if (line == NULL) {   // Ctrl+D
         printf(COLOR_YELLOW "\n[Client INFO] Exit (Ctrl+D)" COLOR_RESET "\n");
@@ -399,7 +382,6 @@ static void handle_line(char *line) {
     free(line);
 }
 
-// ========== Readline 初始化 ==========
 static void init_readline() {
     using_history();
     stifle_history(MAX_HISTORY);
@@ -421,7 +403,6 @@ static void save_history() {
     }
 }
 
-// ========== 主函数 ==========
 int main(int argc, char *argv[]) {
     if (argc != 3 && argc != 5) {
         fprintf(stderr, COLOR_YELLOW "[Client USAGE] %s <server_ip> <port> [--key <auth_key>]" COLOR_RESET "\n", argv[0]);
@@ -452,11 +433,9 @@ int main(int argc, char *argv[]) {
 
     rl_callback_handler_install(COLOR_BLUE "[Client Input] > " COLOR_RESET, handle_line);
 
-    // 初始化累积缓冲区
     accum_len = 0;
     accum_buf[0] = '\0';
 
-    // 主事件循环，带超时
     while (running) {
         fd_set readfds;
         FD_ZERO(&readfds);
@@ -480,14 +459,13 @@ int main(int argc, char *argv[]) {
         }
 
         if (ret == 0) {
-            // 超时：检查是否有未打印的累积数据（可能回复中不包含关键字）
+            // 超时：回复可能不含关键字，打印已累积的数据。
             if (accum_len > 0) {
                 flush_accum_reply();
             }
             continue;
         }
 
-        // 检查服务器套接字
         if (sock >= 0 && FD_ISSET(sock, &readfds)) {
             if (read_all_server_reply(sock) < 0) {
                 close(sock);
@@ -502,13 +480,11 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // 检查标准输入
         if (FD_ISSET(STDIN_FILENO, &readfds)) {
             rl_callback_read_char();
         }
     }
 
-    // 清理
     rl_callback_handler_remove();
     save_history();
     clear_history();

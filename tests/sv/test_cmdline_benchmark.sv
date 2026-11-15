@@ -1,19 +1,10 @@
-//===========================================================
-// 所属层次：tests/sv；结构体配置解析的只测量基准，不改变生产解析器或随机调用顺序。
-// 依赖 standalone aip_log/aip_cmdline 聚合入口，以及 C 端提供的进程 CPU/单调 wall 时钟。
-// 本模块持有所有目标结构体、数组和计时结果；每次仿真只跑一种 case，不跨仿真保留状态。
-// init 包含第一次 schema 注册；repeat/array/lookup/compact 预热一次后测稳态工作量。
-// dotted/compact 的 end-to-end 输入必须由真实 plusarg 提供；只有 override 显式写运行时表。
-// defaults 仅用于 init/repeat 的零默认值对照，array 不接受 compact/defaults；compact 微基准
-// 直接扫描固定的 16 成员文本，lookup 可用 BENCH_MISS=1 查询不存在的完整 key。
-// size/records 表示有效工作量：apply 为每轮记录数/总记录数，lookup 为 1/总查询数，
-// compact 为 16/总成员查询数；因此不同 case 的 records 不应直接混作同一种吞吐量。
-// 计时包含最小 checksum 累加，不含完整字段验证、override 更新验证及输出；全部在零仿真时间执行。
-//===========================================================
+// 结构体配置解析的只测量基准（不改变生产解析器或随机调用顺序）；每次仿真只跑一种 case，全部在零仿真时间执行。
+// init 含首次 schema 注册；repeat/array/lookup/compact 预热一次后测稳态。records 为有效工作量，各 case 不能直接比吞吐。
+// 计时含最小 checksum 累加，不含字段验证、override 更新验证及输出。
 `include "aip_log.sv"
 `include "aip_cmdline.sv"
 
-// 独立顶层避免其它测试进程干扰 CPU 时间；DPI 必须读取真实主机时间而不是 $realtime。
+// 独立顶层避免其它测试干扰 CPU 时间；DPI 读真实主机时钟而非 $realtime。
 module test_cmdline_benchmark;
     import "DPI-C" function real aip_cmdline_bench_cpu_seconds();
     import "DPI-C" function real aip_cmdline_bench_wall_seconds();
@@ -78,8 +69,7 @@ module test_cmdline_benchmark;
     string lookup_key;
     aip_struct_runtime::lookup_t lookup_result;
 
-    // 在计时前读取控制参数并拒绝不支持的组合；实际 plusarg 字段不在这里查找或转换。
-    // init 的有效迭代数固定为 1，保证结果代表第一次 apply，不与后续稳态调用混在一起。
+    // init 迭代数固定为 1，使结果代表第一次 apply，不混入稳态调用。
     task automatic read_configuration();
         void'($value$plusargs("BENCH_CASE=%s", bench_case));
         void'($value$plusargs("BENCH_SOURCE=%s", bench_source));
@@ -114,8 +104,7 @@ module test_cmdline_benchmark;
         foreach (field_names[i]) field_names[i] = $sformatf("f%02d", i);
     endtask
 
-    // 只有 override 场景写表；scalar/lookup 使用精确字段，array 使用现有 canonical .each。
-    // 默认长度通过公开 apply 宏传入，不注入虚假的 plusarg，也不提前调用 schema 注册。
+    // 只有 override 场景写表；默认长度经公开 apply 宏传入，不注入虚假 plusarg，也不提前注册 schema。
     task automatic install_override();
         string prefix;
         if (bench_source != "override") return;
@@ -124,8 +113,7 @@ module test_cmdline_benchmark;
             aip_cmdline_override::set_val({prefix, field_names[i]}, $sformatf("%0d", i + 1));
     endtask
 
-    // 在计时外验证完整 16 字段；first_value 支持更新验证，defaults 模式要求其余字段全零。
-    // 采用四态严格比较，未知值也视为失败，避免仅 checksum 相同掩盖错误字段。
+    // 计时外验证全部 16 字段，四态严格比较：未知值也算失败，避免 checksum 相同掩盖错误字段。
     task automatic validate_record(input bench_record_t item, input int first_value,
                                    input bit defaults_mode = 0);
         int values[16];
@@ -142,8 +130,7 @@ module test_cmdline_benchmark;
         end
     endtask
 
-    // 主测量完成后再验证结果；微基准检查查找结果及来源，不把完整字符串比较混入热循环。
-    // checksum 与最后一个结果同时验证，避免某一轮查找失败被最后一次成功覆盖。
+    // checksum 与最后结果同时验证，避免某一轮查找失败被最后一次成功掩盖。
     task automatic validate_result();
         case (bench_case)
             "init", "repeat": begin
@@ -181,8 +168,7 @@ module test_cmdline_benchmark;
             $fatal(1, "BENCH_CHECKSUM expected=%0d actual=%0d", expected_checksum, checksum);
     endtask
 
-    // override 在测量及验证之后修改 f00，再通过原公开 apply 路径验证可见性。
-    // 此步骤不计入 cpu_s/wall_s，用来防止未来缓存优化掩盖运行时更新；不修改生产实现。
+    // 测量后修改 f00 并经公开 apply 路径验证可见性（不计时），防止未来缓存优化掩盖运行时更新。
     task automatic validate_override_update();
         if (bench_source != "override") return;
         if (bench_case == "array") begin
@@ -197,8 +183,7 @@ module test_cmdline_benchmark;
         end
     endtask
 
-    // 预热与计时显式分开，array 沿用原 dynamic-array 宏的 fixed/each 两遍实现。
-    // 计时区只留下待测调用及最少的观测操作；完整断言和最终报告在停止时钟之后执行。
+    // 计时区只留待测调用与最少观测操作；完整断言和报告在停表之后执行。
     initial begin
         aip_cmdline_print_control::configure(0, 0);
         read_configuration();

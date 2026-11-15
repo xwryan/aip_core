@@ -1,21 +1,10 @@
-//===========================================================
-// 所属层次：src/sv/core/cmdline（内部 include 片段，不是独立 compilation unit）。
-// schema 容器适配：类型检查、无损比较键、整条记录排序和各类型字段数组解析。
-// 依赖 schema 共享运行时、基础解析类及前向声明的 strict queue 类型解析器。
-// 目标由调用者拥有，临时动态数组和诊断帧限于当前调用；保留 fixed/each 与 unique/sort 顺序。
-// 只允许 aip_cmdline.sv 在其 include 窗口加载；拒绝直接包含，避免创建第二份 $unit/package 类型。
-// 聚合入口持有唯一的 AIP_CMDLINE_SV 防重入 guard，本文件不声明新的 package。
-// 所有 CLI 查询均经过共享参数源；恢复后重取当前进程参数，保持既有解析/优先级规则。
-//===========================================================
+// schema 容器适配：类型检查、无损比较键、整条记录排序及各类型字段数组解析。
+// 内部 include 片段：只允许 aip_cmdline.sv 在其 include 窗口加载，拒绝直接包含以免创建第二份 $unit/package 类型。
 `ifndef AIP_CMDLINE_INTERNAL_INCLUDE
 `AIP_CMDLINE_INTERNAL_INCLUDE_ERROR__USE_AIP_CMDLINE_SV
 `else
-// Typed adapter used by integral and enum field macros.  The generic type is
-// bound at the call site, so `$bits(F)` and the source signedness are those of
-// the actual struct member rather than a formatter's implementation type.
-// Signedness is inferred by extending an all-ones value to one extra bit;
-// assignment extension follows the declared packed type (including typedefs
-// and enum base types).
+// Typed key adapter for integral/enum field macros: F is bound at the call site, so $bits(F) and signedness
+// are the member's own; signedness is probed by extending all-ones by one bit (honors typedefs/enum bases).
 class aip_struct_typed_key #(type F = int);
     localparam int WIDTH = $bits(F);
 
@@ -37,11 +26,9 @@ class aip_struct_typed_key #(type F = int);
     endfunction
 endclass
 
-// Generic stable whole-record postprocessing for schema arrays.  Field
-// adapters snapshot every scalar member, so controls may name any field (or a
-// nested scalar path) without hard-coding a member such as `.value`.
+// Stable whole-record postprocessing for schema arrays: field adapters snapshot every scalar member, so
+// controls may name any field or nested scalar path without hard-coding a member such as `.value`.
 class aip_struct_array_postprocess #(type T = int);
-    // Return the canonical key used by the per-container descriptor maps.
     static function string descriptor_key(string root, int idx, string suffix);
         return $sformatf("%s|%0d|%s", root, idx, suffix);
     endfunction
@@ -86,9 +73,7 @@ class aip_struct_array_postprocess #(type T = int);
                 if (sa) begin
                     bsa = ba;
                     bsb = bb;
-                    // The descriptor stores only the field-width bits in the
-                    // low part of the envelope.  Sign-extend before using the
-                    // 1024-bit relational operators.
+                    // Descriptors hold only the field-width low bits; sign-extend before 1024-bit compares.
                     if (wa > 0 && wa < 1024) begin
                         if (ba[wa-1])
                             for (int q = wa; q < 1024; q++) bsa[q] = 1'b1;
@@ -128,10 +113,8 @@ class aip_struct_array_postprocess #(type T = int);
         return 0;
     endfunction
 
-    // Struct-container controls belong to ROOT.each.<suffix>.  Reject an
-    // indexed control that would otherwise be mistaken for a per-record key;
-    // primitive-array controls are absent from `names` and remain owned by
-    // their array resolver.
+    // Struct-container controls belong to ROOT.each.<suffix>; reject indexed forms mistaken for per-record keys.
+    // Primitive-array controls are absent from `names` and stay owned by their array resolver.
     static function void reject_indexed_controls(string root, string names[$]);
         string keys[$];
         string args[$];
@@ -186,7 +169,6 @@ class aip_struct_array_postprocess #(type T = int);
         end
     endfunction
 
-    // 容器后处理先校验全部控制再排序；诊断在每个校验点选择控制键及原文，避免沿用末字段。
     static function void apply(string root, ref T arr[]);
         string names[$];
         string runtime_names[$];
@@ -209,8 +191,7 @@ class aip_struct_array_postprocess #(type T = int);
 
         reject_indexed_controls(root, names);
 
-        // Normalize every control first.  No array element is moved until
-        // this pass has checked all values and the single-active-sort rule.
+        // Validate every control (and the single-active-sort rule) before moving any element.
         active_sorts = 0;
         foreach (names[ni]) begin
             string suffix = names[ni];
@@ -253,10 +234,8 @@ class aip_struct_array_postprocess #(type T = int);
             aip_struct_runtime::fail($sformatf(
                 "%s has more than one active struct sort key", root));
 
-        // Unique checks use the final typed descriptors.  Pairwise comparison
-        // deliberately avoids stringification and therefore preserves packed
-        // width/signedness, exact real values, case-sensitive strings, and
-        // enum underlying bits.
+        // Unique compares final typed descriptors, never strings, so packed width/signedness, exact real
+        // values, case-sensitive strings and enum underlying bits are preserved.
         foreach (names[ni]) begin
             string suffix = names[ni];
             aip_struct_runtime::lookup_t ul;
@@ -281,9 +260,8 @@ class aip_struct_array_postprocess #(type T = int);
 
         if (active_sorts == 0) return;
 
-        // Stable insertion sort over a permutation of complete records.  The
-        // descriptors travel with the permutation indices; the actual swap
-        // is on T, so unregistered fields and opaque handles stay attached.
+        // Stable insertion sort over record indices; the final move is on whole T values, so unregistered
+        // fields and opaque handles stay attached.
         perm_order = new[arr.size()];
         for (int i = 0; i < arr.size(); i++) perm_order[i] = i;
         for (int i = 1; i < perm_order.size(); i++) begin
@@ -309,28 +287,23 @@ class aip_struct_refcheck #(type T = int);
     endfunction
 endclass
 
-// Dynamic unpacked arrays cannot be indexed merely to perform the typed
-// compile-time check: an empty array would trigger a run-time out-of-bounds
-// reference before the schema has a chance to resize it.  An open-array ref
-// formal preserves the element type without evaluating an element.
+// Typed check for dynamic arrays via an open-array ref formal: indexing an element would hit a run-time
+// out-of-bounds reference on an empty array before the schema can resize it.
 class aip_struct_array_refcheck #(type T = int);
     static function void check(ref T value[]);
     endfunction
 endclass
 
-// Canonical resolver for primitive schema arrays.  Unlike resolve_array, this
-// never probes a bare leaf or legacy path: all rules are rooted at the schema
-// element path and compact members are considered only as an inherited
-// baseline.
+// Canonical resolver for primitive schema arrays: unlike resolve_array it never probes a bare leaf or legacy
+// path; all rules are rooted at the schema element path and compact members are only an inherited baseline.
 class aip_struct_schema_array_runtime #(type T = int);
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
     static function void postprocess(string root, string field, ref T arr[]);
         aip_cmdline_diagnostic::push({root, ".", field});
         postprocess_impl(root, field, arr);
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 校验数组最终值的唯一性及排序控制，并原地排序；调用者持有诊断帧，失败前选择实际控制键。
+    // 对最终数组校验 unique/sort 并原地排序。
     protected static function void postprocess_impl(string root, string field, ref T arr[]);
         aip_struct_runtime::lookup_t ul, sl;
         string u, s;
@@ -358,7 +331,6 @@ class aip_struct_schema_array_runtime #(type T = int);
         return r;
     endfunction
 
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
     static function void resolve(string root, string field, string compact,
                                   T default_val, int fixed_size, int default_size,
                                   ref T arr[]);
@@ -367,8 +339,7 @@ class aip_struct_schema_array_runtime #(type T = int);
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 按 schema 的整体值、each 和索引规则生成整数数组，检查静态容量、长度及唯一性。
-    // 仅消费调用者提供的规范路径；当前解析项切换诊断原文，正常返回由外层恢复来源。
+    // 按 schema 的整体值、each 与索引规则生成整数数组，检查静态容量、长度及唯一性。
     protected static function void resolve_impl(string root, string field, string compact,
                                   T default_val, int fixed_size, int default_size,
                                   ref T arr[]);
@@ -445,8 +416,7 @@ class aip_struct_schema_array_runtime #(type T = int);
         if (fixed_size < 0) aip_struct_runtime::charge_allocation({root, ".", field}, n);
         arr = new[n]; from_each = new[n];
         winners = new[n];
-        // A complete integral permutation intentionally consumes its full
-        // shuffle even when every slot is later shadowed by indexed winners.
+        // A full integral permutation consumes its whole shuffle even if indexed winners later shadow every slot.
         if (ol.found) begin
             aip_cmdline_diagnostic::select_value({root, ".", field}, overall);
             aip_struct_runtime::prepare_container_generator(
@@ -500,24 +470,20 @@ class aip_struct_schema_array_runtime #(type T = int);
                         aip_struct_runtime::fail($sformatf("%s.%s.unique: duplicate final value",root,field));
         end
         postprocess(root, field, arr);
-        // after this resolver returns.
     endfunction
 endclass
 
-// String schema arrays need their own non-parameterized adapter.  VCS checks
-// both branches of a run-time `$typename(T)` conditional while elaborating a
-// parameterized class, so keeping T'(string) casts in the integral resolver
-// makes even an int specialization fail with SV-WMIBC.  This adapter preserves
-// the same normalization and precedence while decoding string tokens directly.
+// String schema arrays need a non-parameterized adapter: VCS elaborates both branches of a run-time
+// `$typename(T)` check, so T'(string) casts in the integral resolver make even int specializations fail
+// with SV-WMIBC. Normalization and precedence match the integral resolver.
 class aip_struct_string_array_runtime;
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
     static function void postprocess(string root, string field, ref string arr[]);
         aip_cmdline_diagnostic::push({root, ".", field});
         postprocess_impl(root, field, arr);
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 校验字符串数组的 unique/sort 控制并原地排序，拒绝 seq/perm；metadata 阶段不处理配置。
+    // 对最终字符串数组校验 unique/sort 并原地排序，拒绝 seq/perm。
     protected static function void postprocess_impl(string root, string field, ref string arr[]);
         aip_struct_runtime::lookup_t ul, sl, ql; string u,s;
         if (aip_struct_runtime::metadata_mode) return;
@@ -565,7 +531,6 @@ class aip_struct_string_array_runtime;
         return 1;
     endfunction
 
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
     static function void preflight_unique(
         string path,
         string each_expr,
@@ -577,8 +542,7 @@ class aip_struct_string_array_runtime;
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 无随机抽样地检查固定字符串冲突和 each 候选容量；无法有限枚举时交给后续有界重抽。
-    // 固定候选绑定具体索引，each 候选保留完整原文，诊断帧由外层统一恢复。
+    // 不抽样：检查固定值冲突与 each 候选容量，无法有限枚举时留给后续有界重抽。
     protected static function void preflight_unique_impl(
         string path,
         string each_expr,
@@ -648,7 +612,6 @@ class aip_struct_string_array_runtime;
                 path, available, each_slots));
     endfunction
 
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
     static function void resolve(string root, string field, string compact,
                                  string default_val, int fixed_size, int default_size,
                                  ref string arr[]);
@@ -657,8 +620,7 @@ class aip_struct_string_array_runtime;
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 按 schema 优先级选择字符串数组各槽位，检查容量、转义和唯一性；允许合法空字符串。
-    // 不支持 seq/perm，实际值解析前切换槽位原文，正常返回由外层恢复诊断帧。
+    // 按 schema 优先级选择各槽位并检查容量、转义与唯一性；不支持 seq/perm，允许合法空字符串。
     protected static function void resolve_impl(string root, string field, string compact,
                                  string default_val, int fixed_size, int default_size,
                                  ref string arr[]);
@@ -796,10 +758,8 @@ class aip_struct_string_array_runtime;
     endfunction
 endclass
 
-// The legacy real resolver predates the typed array API and only exposes a
-// dynamic-array entry point.  This adapter supplies the static-size checks and
-// schema DEFAULT_SIZE behavior needed by real-valued members without changing
-// the legacy resolver's public signature.
+// Adapter over the legacy real resolver (dynamic-array entry only): adds static-size checks and
+// schema DEFAULT_SIZE behavior for real members without changing the legacy public signature.
 class aip_struct_real_array_runtime;
     // 保留 schema 既有 API，文本溢出检查统一交给公共 real 解析层。
     static function bit decimal_overflow(string token);
@@ -820,10 +780,8 @@ class aip_struct_real_array_runtime;
             aip_struct_runtime::fail($sformatf("%s invalid real literal '%s'",path,token));
         return v;
     endfunction
-    // Validate the complete real grammar before invoking the legacy real
-    // sampler.  The legacy parser intentionally accepts a numeric prefix via
-    // str_to_real(); schema values must consume every token instead.  Keeping
-    // validation separate from sampling preserves the legacy RNG draw order.
+    // Validate the complete real grammar (every token consumed) before sampling; keeping validation
+    // separate from sampling preserves the legacy RNG draw order.
     static function void validate_range_or_literal(string token, string path,
                                                    bit allow_unwrapped = 0);
         string s, p[$];
@@ -859,8 +817,7 @@ class aip_struct_real_array_runtime;
         void'(strict_parse(s, path));
     endfunction
 
-    // 验证 real 标量的完整表达式并保留参数/原文诊断上下文，不消费 RNG。
-    // 权重须为非负 int 整数；禁用项仍校验左侧，整组全零在抽样前报错。
+    // 不消费 RNG；权重须为 0..INT_MAX 整数，零权重项仍校验左侧，整组全零在抽样前报错。
     static function void validate_scalar_expr(string expr, string path);
         string s, p[$], wparts[$], item, left, right;
         int op_eq, op_sl, op, op_count;
@@ -871,9 +828,8 @@ class aip_struct_real_array_runtime;
         if (s == "")
             aip_struct_runtime::fail($sformatf("%s invalid real literal '%s'", path, expr));
 
-        // A wrapped group is a weighted group, not a parenthesized numeric
-        // expression.  Validate every weighted arm, including arms that the
-        // eventual random draw does not select.
+        // A wrapped group is a weighted group, not a parenthesized number; validate every arm,
+        // including arms the eventual draw does not select.
         if ((s[0] == "{" || s[0] == "(") &&
             ((s[0] == "{" && s[s.len()-1] == "}") ||
              (s[0] == "(" && s[s.len()-1] == ")"))) begin
@@ -908,9 +864,8 @@ class aip_struct_real_array_runtime;
             s[s.len()-1] == "}" || s[s.len()-1] == ")")
             aip_struct_runtime::fail($sformatf("%s invalid real expression '%s'", path, expr));
 
-        // inc:/dec: have an exact two-or-three-literal grammar.  Checking the
-        // prefix (rather than searching anywhere in the string) rejects
-        // trailing garbage such as `1inc:2:3`.
+        // inc:/dec: take two or three literals; matching the prefix (not a substring search)
+        // rejects trailing garbage such as `1inc:2:3`.
         if (s.len() >= 4 && (s.substr(0,3) == "inc:" || s.substr(0,3) == "dec:")) begin
             is_inc = (s.substr(0,3) == "inc:");
             p = {};
@@ -926,8 +881,7 @@ class aip_struct_real_array_runtime;
             return;
         end
 
-        // A bracketed range must be exactly one colon pair.  An unwrapped
-        // colon form follows the same rule; any additional colon is garbage.
+        // Bracketed or unwrapped, a range is exactly one colon pair; any extra colon is garbage.
         if (s[0] == "[") begin
             if (s.len() < 3 || s[s.len()-1] != "]")
                 aip_struct_runtime::fail($sformatf("%s invalid real range '%s'", path, expr));
@@ -937,8 +891,7 @@ class aip_struct_real_array_runtime;
         op = aip_str::str_find(s, ":=");
         if (op < 0) op = aip_str::str_find(s, ":/");
         if (op >= 0) begin
-            // An unwrapped weight item is accepted by aip_cmdline_real; use
-            // the same strict arm checks as a wrapped group.
+            // aip_cmdline_real accepts an unwrapped weight item; apply the same strict arm checks.
             left = aip_str::strip(s.substr(0, op-1));
             right = aip_str::strip(s.substr(op+2, s.len()-1));
             if (left == "" || right == "")
@@ -969,21 +922,17 @@ class aip_struct_real_array_runtime;
         foreach (parts[i]) validate_scalar_expr(parts[i], path);
     endfunction
 
-    // 对 real 表达式先完整校验再沿原算法抽样；临时帧持有 path/完整原文。
-    // 子项校验不覆盖原文，求值前恢复完整表达式，正常返回后恢复调用者诊断帧。
+    // 先完整校验再沿原算法抽样，校验本身不消费 RNG。
     static function real draw_strict(string expr, string path);
         real result;
         aip_cmdline_diagnostic::push_value(path, expr);
         validate_expr(expr, path);
         aip_cmdline_diagnostic::select_value(path, expr);
-        // parse_value performs the documented random selection (list, range,
-        // weighted, or inc/dec) after validation, so no extra RNG is consumed.
         result = aip_cmdline_real::parse_value(expr);
         aip_cmdline_diagnostic::pop();
         return result;
     endfunction
 
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
     static function bit deterministic_value(
         aip_struct_runtime::lookup_t winner,
         real default_val,
@@ -996,8 +945,7 @@ class aip_struct_real_array_runtime;
         return result;
     endfunction
 
-    // 不消费随机数，判断 winner 是否只能得到一个不同的 real 值；缺失时返回默认值。
-    // 多候选或不可有限枚举返回 0，非法数字沿用外层绑定的索引与完整原文并立即 fatal。
+    // 不消费 RNG；多候选或不可有限枚举返回 0，非法数字在外层绑定的索引上下文中 fatal。
     protected static function bit deterministic_value_impl(
         aip_struct_runtime::lookup_t winner,
         real default_val,
@@ -1027,10 +975,8 @@ class aip_struct_real_array_runtime;
         return 1;
     endfunction
 
-    // Real finite analysis remains separate from integral enumeration:
-    // fixed/list and discrete inc/dec expressions can be proven, while
-    // continuous ranges and weighted ranges retain bounded rejection.
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
+    // Real finite analysis is separate from integral enumeration: fixed/list and discrete inc/dec
+    // can be proven, while continuous and weighted ranges keep bounded rejection.
     static function void preflight_unique(
         string path,
         string each_expr,
@@ -1042,8 +988,6 @@ class aip_struct_real_array_runtime;
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 预检固定 real 值冲突及离散 each 候选容量，不调用随机抽样；连续候选交给后续重抽。
-    // 检查 each 前选择其原文，外层负责所有正常返回路径的诊断帧恢复。
     protected static function void preflight_unique_impl(
         string path,
         string each_expr,
@@ -1107,14 +1051,13 @@ class aip_struct_real_array_runtime;
                 path, available, each_slots));
     endfunction
 
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
     static function void postprocess(string root,string field,ref real arr[]);
         aip_cmdline_diagnostic::push({root, ".", field});
         postprocess_impl(root, field, arr);
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 对最终 real 数组校验 unique/sort 并原地排序，拒绝 seq/perm；逐控制项保留报错原文。
+    // 对最终 real 数组校验 unique/sort 并原地排序，拒绝 seq/perm。
     protected static function void postprocess_impl(string root,string field,ref real arr[]);
         aip_struct_runtime::lookup_t ul,sl,ql; string u,s;
         if (aip_struct_runtime::metadata_mode) return;
@@ -1129,7 +1072,7 @@ class aip_struct_real_array_runtime;
         if(ul.found) begin aip_cmdline_diagnostic::select_value({root, ".", field, ".unique"}, ul.value); u=aip_str::lower(aip_str::strip(ul.value)); if(u!="0"&&u!="1") aip_struct_runtime::fail($sformatf("%s.%s.unique must be 0 or 1",root,field)); if(u=="1") for(int i=0;i<arr.size();i++) for(int j=0;j<i;j++) if(arr[i]==arr[j]) aip_struct_runtime::fail($sformatf("%s.%s.unique: duplicate final value",root,field)); end
         if(sl.found) begin aip_cmdline_diagnostic::select_value({root, ".", field, ".sort"}, sl.value); s=aip_str::lower(aip_str::strip(sl.value)); if(s!="asc"&&s!="desc"&&s!="none") aip_struct_runtime::fail($sformatf("%s.%s.sort must be asc, desc, or none",root,field)); if(s=="asc"||s=="desc") for(int i=1;i<arr.size();i++) begin real v; int j; v=arr[i]; j=i; while(j>0&&((s=="asc"&&v<arr[j-1])||(s=="desc"&&v>arr[j-1]))) begin arr[j]=arr[j-1]; j--; end arr[j]=v; end end
     endfunction
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
+
     static function void resolve_schema(string root, string field, string compact,
                                         real default_val, int fixed_size, int default_size,
                                         ref real arr[]);
@@ -1138,8 +1081,7 @@ class aip_struct_real_array_runtime;
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 按 schema 优先级解析 real 数组的大小和槽位，完整校验表达式后抽样并检查唯一性。
-    // 静态数组拒绝 size，动态数组先检查分配预算；调用者持有并恢复此次诊断帧。
+    // 按 schema 优先级确定大小与各槽位；动态数组先扣分配预算，unique 时先预检再抽样。
     protected static function void resolve_schema_impl(string root, string field, string compact,
                                         real default_val, int fixed_size, int default_size,
                                         ref real arr[]);
@@ -1265,7 +1207,6 @@ class aip_struct_real_array_runtime;
         // caller performs final typed uniqueness/sort validation
     endfunction
 
-    // 为本次解析单独保存诊断帧，提前返回也由包装层恢复上层来源。
     static function void resolve(string name, string path, real default_val,
                                  int fixed_size, int default_size,
                                  ref real arr[]);
@@ -1274,8 +1215,7 @@ class aip_struct_real_array_runtime;
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 兼容旧 real 数组适配入口：解析长度、整体列表、each 和索引覆盖，写入动态临时数组。
-    // 各转换前记录实际键和原文；调用者负责诊断帧，不改变默认值及覆盖顺序。
+    // 旧 real 数组适配入口：先定长度，再依次填 default/each、整体列表、索引覆盖，保持既有覆盖顺序。
     protected static function void resolve_impl(string name, string path, real default_val,
                                  int fixed_size, int default_size,
                                  ref real arr[]);
@@ -1343,11 +1283,9 @@ class aip_struct_real_array_runtime;
     endfunction
 endclass
 
-// schema 枚举数组的后处理与 typed 解析共用 E，按最终位值执行唯一性检查和排序；
-// 各控制项独立选取诊断原文，避免连续查询覆盖报错现场。
+// schema 枚举数组：typed 解析与后处理共用 E，按最终位值做唯一性检查与排序。
 class aip_struct_enum_array_postprocess #(type E = int);
-    // 对已生成数组应用 .unique/.sort，拒绝不支持的 .seq/.perm；metadata 阶段无副作用。
-    // 正常退出恢复上层来源，所有非法控制和重复值由公共 fatal 终止。
+    // 对已生成数组应用 .unique/.sort（拒绝 .seq/.perm）；metadata 阶段直接返回。
     static function void apply(string root,string field,ref E arr[]);
         aip_struct_runtime::lookup_t ul, sl, ql;
         string u, s, path, generator_suffix;
@@ -1397,8 +1335,6 @@ class aip_struct_enum_array_postprocess #(type E = int);
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // schema 枚举数组入口：建立字段上下文后解析至动态数组，支持静态容量和默认大小。
-    // 每次抽样直接转换为 E，唯一性比较真实枚举位值；错误不返回部分有效结果。
     static function void resolve(string root, string field, string compact,
                                  E default_val, int fixed_size, int default_size,
                                  input string names[$], input logic [1023:0] bits[$],
@@ -1409,8 +1345,6 @@ class aip_struct_enum_array_postprocess #(type E = int);
         aip_cmdline_diagnostic::pop();
     endfunction
 
-    // 在同步诊断范围内选择 winner 并生成数组；每条控制键、overall 和 each
-    // 都在校验前记录对应原文，metadata 阶段仅初始化默认数组不解析配置。
     static function void resolve_impl(string root, string field, string compact,
                                  E default_val, int fixed_size, int default_size,
                                  input string names[$], input logic [1023:0] bits[$],

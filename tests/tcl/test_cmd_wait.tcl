@@ -1,18 +1,15 @@
-# tests/tcl：逐命令 wait 的 UCLI 黑盒验证，依赖 test_cmd_wait.sv 中注册的命令。
-# 脚本只拥有断言计数；业务执行、参数与结果必须由框架保持独立。所有失败
-# 都阻止 CMD_WAIT_TCL_PASS 标记，外层 runner 再校验退出码和 UVM 报告。
+# 逐命令 wait 的 UCLI 黑盒验证（命令由 test_cmd_wait.sv 注册）；任何失败都阻止 CMD_WAIT_TCL_PASS 标记。
 source ../../src/tcl/aip_cmd.tcl
 set ::aip_ack_timeout_ns 5000
 set ::cw_checks 0
 
-# 断言失败立即停止脚本，避免后续命令覆盖失败现场。
 proc cw_check {name condition} {
     if {!$condition} { error "CMD_WAIT_FAIL $name" }
     incr ::cw_checks
     puts "CMD_WAIT_CHECK_PASS $name"
 }
 
-# 查询独立业务观察记录；字段结果不依赖框架调度器私有变量。
+# 查询独立业务观察记录，不依赖调度器私有变量。
 proc cw_state {name field} {
     aip_send_cmd "cw_state name=$name field=$field"
     if {[aip_check_status] != 0} { error "CMD_WAIT_FAIL observation $name $field" }

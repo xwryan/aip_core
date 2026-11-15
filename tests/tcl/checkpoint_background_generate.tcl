@@ -1,5 +1,4 @@
-# tests/tcl：首次启动三条后台业务，在途保存快照后继续运行作为连续执行基线。
-# 依赖专属 simv/测试 helper；快照目录归本用例独占，不删除其他测试产物。
+# 启动三条后台业务，在途保存快照后继续运行，作为连续执行基线。
 set ::env(AIP_CORE) [file normalize ../..]
 source [file join $::env(AIP_CORE) dist aip_init.tcl]
 source ../tcl/checkpoint_background_common.tcl

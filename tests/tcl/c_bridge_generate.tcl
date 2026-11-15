@@ -1,4 +1,4 @@
-# tests/tcl：默认未监听时执行文件命令并生成唯一基准快照；所有 OS 检查由宿主握手完成。
+# 默认未监听时执行文件命令并生成唯一基准快照；OS 检查由宿主握手完成。
 source [file join $::env(AIP_CORE) tests tcl c_bridge_common.tcl]
 run 1000ns
 socket_reject_arguments

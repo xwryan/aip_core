@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# tests/checkpoint：独立编译/运行后台在途快照回归，必须在配置好 VCS 的仿真主机执行。
-# 依赖 bash、VCS、timeout 和文本门禁工具；本脚本只拥有专属 binary/csrc/log/快照目录，
-# 不删除其他测试产物。save/restore 偶发宿主停滞只在正常 timeout(124) 时重试；
-# VCS 不响应 TERM 时 10s 后强杀，137 必须失败，避免无限挂起或掩盖异常终止。
+# 后台在途快照回归的独立编译/运行脚本，只管理专属 binary/csrc/log/快照目录。
+# save/restore 偶发宿主停滞只在 timeout(124) 时重试；VCS 不响应 TERM 时 10s 后强杀，137 必须失败。
 set -euo pipefail
 ckb_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 cd "$ckb_root/tests/sv"

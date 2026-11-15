@@ -7,8 +7,6 @@ proc check {name cond} {
     if {$cond} { puts "\[PASS\] $name"; incr p } else { puts "\[FAIL\] $name"; incr f }
 }
 
-# ====== Register R/W Tests ======
-
 puts "\n=== R1: write addr=0x1000 data=0xdead ==="
 reg_acc op=write addr=0x1000 len=4 mask=0xff data=0xdead
 check "reg write status" [expr {[aip_check_status] == 0}]
@@ -51,7 +49,6 @@ check "xxx::reg_write write status" [expr {[aip_check_status] == 0}]
 xxx::reg_write op=read addr=0x8000
 check "xxx::reg_write readback == 0xabcd" [expr {[aip_read_result] eq "rdata=0xabcd"}]
 
-# ====== Summary ======
 puts "\n=========================================="
 puts "  PASS: $pass  FAIL: $fail  TOTAL: [expr {$pass+$fail}]"
 if {$fail == 0} { puts "  ALL TESTS PASSED" }

@@ -1,4 +1,4 @@
-// src/sv/ral：命名 RAL 访问命令。语法层保持很薄，实际对象访问由 service 完成。
+// 命名 RAL 访问命令：语法层保持很薄，实际对象访问由 service 完成。
 `ifndef AIP_RAL_COMMANDS_SV
 `define AIP_RAL_COMMANDS_SV
 

@@ -1,6 +1,5 @@
-// src/sv/ral：memory frontdoor 与内部 raw 逐拍传输；依赖 UVM 1.2 和 RAL hooks。
-// map/adapter/原 parent 均由 TB 拥有；临时特殊 parent clone 只存活一次 execute。
-// m_set_item/m_sequence_exiting 为任务0已验证的公开 helper，限定当前 VCS UVM 1.2。
+// memory frontdoor 与内部 raw 逐拍传输：map/adapter/原 parent 归 TB，临时特殊 parent clone 只存活一次 execute。
+// 依赖 UVM 1.2 的 m_set_item/m_sequence_exiting helper（仅针对当前 VCS 自带的 UVM 1.2）。
 `ifndef AIP_RAL_MEM_FRONTDOOR_SV
 `define AIP_RAL_MEM_FRONTDOOR_SV
 
@@ -73,8 +72,7 @@ class aip_ral_beat_executor;
             rw.parent=owner;
             cloned=1;
         end
-        // 已有组合操作 owner 的 grab 不得被内层访问释放；普通单次操作在此独占。
-        // executor为当前owner取得一次独占；标准UVM parent不会预先持有同一sequencer锁。
+         // 已有组合操作 owner 的 grab 不得被内层访问释放；普通单次操作由 executor 独占一次（标准 parent 不会预先持锁）。
         held=0;
         owner.grab(sqr);
         result=0; rw.status=UVM_IS_OK; bus_status=AIP_RAL_BUS_OK; detail="";
@@ -132,12 +130,11 @@ class aip_ral_beat_executor;
     endtask
 endclass
 
-// 标准 memory 入口保留外层 callback；只替换其物理 beat 发送部分。
+// 标准 memory 入口保留外层 callback，只替换物理 beat 发送；每个 memory/map slot 独享执行器与诊断。
 class aip_ral_mem_frontdoor extends uvm_reg_frontdoor;
     local aip_ral_mem_beat_order_e beat_order;
     aip_ral_beat_executor transport;
 
-    // 每个 memory/map slot 独享执行器与诊断，配置冻结后拍序不变。
     function new(string name="aip_ral_mem_frontdoor", aip_ral_mem_beat_order_e order=AIP_RAL_MSW_FIRST);
         super.new(name); beat_order=order; transport=new();
     endfunction

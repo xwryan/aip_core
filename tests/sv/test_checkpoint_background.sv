@@ -1,10 +1,8 @@
-// tests/sv：验证后台任务/真实 UVM sequence 在途时的 VCS save/restore。
-// 依赖 AIP package、官方 Tcl bridge 与 UVM；测试拥有计数、driver 和 sequencer，
-// AIP 拥有每次执行的 process/result context。快照必须保留这些对象及等待位置，
-// 不能因恢复或重新 source Tcl 而重启、丢失任务或解除仍有效的 BUSY 所有权。
+// 后台任务/真实 UVM sequence 在途时的 VCS save/restore 测试。
+// 快照须保留执行上下文与等待位置：恢复或重新 source Tcl 不能重启、丢失任务或解除仍有效的 BUSY 所有权。
 `include "aip_core_pkg.sv"
 
-// 用业务副作用而非私有 process 字段判断是否重复执行；所有记录参与快照。
+// 以业务副作用（而非私有 process 字段）判断是否重复执行。
 class ckb_record;
     static int started[string];
     static int finished[string];
@@ -13,14 +11,13 @@ class ckb_record;
     static int driver_started;
     static int driver_count;
 
-    // 只在用户业务实际进入时计数；重复恢复/启动会使最终断言失败。
     static function void enter(string name);
         aip_cmd handle = aip_cmd::get_handle(name);
         started[name] = started.exists(name) ? started[name] + 1 : 1;
         enter_args[name] = handle.args_in;
     endfunction
 
-    // 正常完成才计数，并重新读取参数以捕获 BUSY 拒绝造成的意外覆盖。
+    // 重新读取参数，以捕获 BUSY 拒绝造成的意外覆盖。
     static function void leave(string name);
         aip_cmd handle = aip_cmd::get_handle(name);
         finished[name] = finished.exists(name) ? finished[name] + 1 : 1;
@@ -28,9 +25,9 @@ class ckb_record;
     endfunction
 endclass
 
-// 两类字符串 task 保留相同用户签名，分别覆盖独立上下文及旧全局返回槽。
+// 同签名的两类 task 分别覆盖独立上下文与旧全局返回槽。
 class ckb_ops;
-    // 先捕获本次 context，快照恢复后同时验证捕获句柄和快捷查找仍有效。
+    // 恢复后同时验证预先捕获的 context 与快捷查找仍有效。
     static task local_task(string text);
         aip_cmd_result_context ctx;
         ctx = aip_cmd::get_current_context();
@@ -52,7 +49,7 @@ class ckb_ops;
         ckb_record::leave("ckb_legacy");
     endtask
 
-    // 另一个旧宏别名只能在旧槽空闲后进入，测试在途时要求返回 BUSY。
+    // 另一旧宏命令只能在旧槽空闲后进入；在途时须返回 BUSY。
     static task legacy_peer(string text);
         ckb_record::enter("ckb_peer");
         aip_cmd::__aip_cmd_last_status = 0;
@@ -74,7 +71,6 @@ endclass
 // 真实 item 通道使恢复后的 sequence 不能仅靠改变计数伪装完成。
 class ckb_item extends uvm_sequence_item;
     `uvm_object_utils(ckb_item)
-    // 标准 factory 构造，无外部资源所有权。
     function new(string name = "ckb_item");
         super.new(name);
     endfunction
@@ -82,7 +78,6 @@ endclass
 
 class ckb_sequence extends uvm_sequence #(ckb_item);
     `uvm_object_utils(ckb_sequence)
-    // 由命令注册宏创建；对象生命周期覆盖本次 start 和快照恢复。
     function new(string name = "ckb_sequence");
         super.new(name);
     endfunction
@@ -113,12 +108,11 @@ endclass
 
 class ckb_driver extends uvm_driver #(ckb_item);
     `uvm_component_utils(ckb_driver)
-    // 组件由 UVM test 持有，收到的 item 仅借用到 item_done。
     function new(string name, uvm_component parent);
         super.new(name, parent);
     endfunction
 
-    // 应答延迟形成真实阻塞握手；每次完整传输增加一次独立业务计数。
+    // 应答延迟形成真实阻塞握手。
     task run_phase(uvm_phase phase);
         forever begin
             ckb_item item;
@@ -133,7 +127,7 @@ endclass
 
 // 只读观察接口不使用 UCLI class 路径，也不依赖调度器私有字段。
 class ckb_state extends aip_cmd;
-    // 返回字段的标量文本；未知目标/字段明确失败，不能被 Tcl 当作空值通过。
+    // 未知目标/字段须明确失败，不能被 Tcl 当作空值通过。
     task cmd_exec();
         string name;
         string field;
@@ -168,7 +162,6 @@ class ckb_state extends aip_cmd;
         endcase
     endtask
 
-    // 常驻观察命令不启动后台进程；注册对象由 package 生命周期管理。
     function new(string name);
         super.new(name);
     endfunction
@@ -180,12 +173,11 @@ class ckb_test extends uvm_test;
     ckb_driver driver;
     uvm_sequencer #(ckb_item) sqr;
 
-    // 构造只建立 UVM 所有权，不启动测试业务。
     function new(string name = "ckb_test", uvm_component parent = null);
         super.new(name, parent);
     endfunction
 
-    // 组件在第一次 elaboration/run_test 时创建，restore 必须复用快照对象。
+    // restore 必须复用快照里的组件，不能重建。
     function void build_phase(uvm_phase phase);
         super.build_phase(phase);
         driver = ckb_driver::type_id::create("driver", this);
@@ -198,7 +190,7 @@ class ckb_test extends uvm_test;
         ckb_binding::sqr = sqr;
     endfunction
 
-    // 保持 objection 到 end_test，业务全部短于 watchdog；总期限防回归永久挂起。
+    // 业务均短于 watchdog；总期限防止回归时永久挂起。
     task run_phase(uvm_phase phase);
         phase.raise_objection(this);
         fork
@@ -228,7 +220,7 @@ class ckb_test extends uvm_test;
     endfunction
 endclass
 
-// 顶层仅启动 UVM；所有业务启动必须来自 Tcl，以覆盖真实 bridge 生命周期。
+// 业务全部由 Tcl 启动，以覆盖真实 bridge 生命周期。
 module test_checkpoint_background;
     initial run_test("ckb_test");
 endmodule

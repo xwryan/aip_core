@@ -1,4 +1,4 @@
-// tests/sv/test_soload.sv — aip_soload end-to-end test (no UVM, command framework only)
+// aip_soload end-to-end test (no UVM, command framework only).
 `include "aip_core_pkg.sv"
 
 module test_soload;

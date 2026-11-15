@@ -1,4 +1,4 @@
-// tests/sv/test_cmdline_wide.sv — wide-integer parsing and random regression
+// Wide-integer parsing and random regression.
 `include "aip_log.sv"
 `include "aip_cmdline.sv"
 
@@ -27,7 +27,6 @@ module test_cmdline_wide;
         end
     endtask
 
-    // ---- aip_str::str_to_vec / str_to_num ----
     task automatic check_str_to_vec();
         aip_vec_t v;
         int width;
@@ -70,7 +69,6 @@ module test_cmdline_wide;
         check_true("str_to_num explicit overflow -> sentinel", raw == {64{1'b1}} && width == 0);
     endtask
 
-    // ---- wide literals through aip_int ----
     task automatic check_wide_literals();
         `aip_int("", longint,     l64,      0);   // +l64=0x8000_0000_0000
         `aip_int("", bit [63:0],  u64,      0);   // +u64=0xFFFF_FFFF_FFFF_FFFF
@@ -92,7 +90,6 @@ module test_cmdline_wide;
         check_true("0xFFFF_FFFF into int unsigned", iu32 == 32'hFFFF_FFFF);
     endtask
 
-    // ---- wide random draws ----
     task automatic check_wide_random();
         bit [127:0] lo128 = 128'h1_0000_0000_0000_0000;
         bit [127:0] hi128 = 128'h1_0000_0000_0000_00FF;
@@ -141,7 +138,6 @@ module test_cmdline_wide;
         end
     endtask
 
-    // ---- rand keyword ----
     task automatic check_rand_keyword();
         bit [255:0] acc = '0;
         bit [255:0] x;

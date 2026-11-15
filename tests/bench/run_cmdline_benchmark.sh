@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# tests/bench 层：串行执行参数解析基准矩阵，收集进程内计时的中位数与范围。
-# 依赖已编译的 tests/sv/simv_cmdline_benchmark、bash、GNU timeout/sort/awk；
-# 必须在 53 的 VCS 环境执行。每个样本单独启动 simv，状态不在样本间共享。
-# 日志归本次运行目录所有；只创建目录和日志，不修改/清理生产源码或旧结果。
+# 串行执行参数解析基准矩阵，收集进程内计时的中位数与范围；每个样本单独启动 simv。
+# 依赖已编译的 tests/sv/simv_cmdline_benchmark 与 GNU timeout/sort/awk。
 set -euo pipefail
 
 bench_script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -34,9 +32,8 @@ bench_log_dir=$(mktemp -d "$bench_sv_dir/cmdline_benchmark.XXXXXX")
 printf 'BENCH_LOG_DIR %s\n' "$bench_log_dir"
 cd -- "$bench_sv_dir"
 
-# 执行一个场景并检查 PASS、退出码及结果条数；任何失败都停止，不纳入统计。
-# noise 是附加无关 plusarg 数，并非总参数数；真正配置按 source 单独提供。
-# 所有字段使用确定值 1..16，不把 RNG、unique/sort 或打印耗时混入本轮基准。
+# 任何失败都停止，不纳入统计。noise 是附加的无关 plusarg 数（非总参数数）。
+# 字段均用确定值 1..16，不把 RNG、unique/sort 或打印耗时混入基准。
 run_case() {
     local label=$1 scenario=$2 source=$3 noise=$4 iterations=$5 size=$6 miss=${7:-0}
     local field compact='' root log result cpu wall records=0 sample i median

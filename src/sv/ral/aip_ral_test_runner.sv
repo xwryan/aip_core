@@ -1,6 +1,5 @@
-// src/sv/ral：精简确定性 RAL runner。
-// 目标是提供可审计的最小闭环：inventory、reset/quiesce、RW数据契约、memory恢复和
-// 明确的UNTESTABLE，而不是复制完整随机验证平台。vreg/vfield只保留ral_op配置访问。
+// 精简确定性 RAL runner：inventory、reset/quiesce、RW 数据契约、memory 恢复与明确 UNTESTABLE 的最小可审计闭环，
+// 不复制完整随机验证平台；vreg/vfield 只保留 ral_op 配置访问。
 `ifndef AIP_RAL_TEST_RUNNER_SV
 `define AIP_RAL_TEST_RUNNER_SV
 

@@ -1,5 +1,4 @@
-# tests/paused_injection：真实UCLI入口，仅通过发布loader加载待测实现。
-# 本文件拥有测试初始化顺序，不改写生产proc；fixture与运行日志归runner所有。
+# 真实 UCLI 入口：仅通过发布 loader 加载待测实现，不改写生产 proc。
 if {$::env(AIP_INJECTION_LOADER) ni {source so}} {
     error "AIP_INJECTION_FAIL invalid loader"
 }

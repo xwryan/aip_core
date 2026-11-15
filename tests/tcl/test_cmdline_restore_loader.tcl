@@ -1,11 +1,8 @@
-# tests/tcl：真实源码/二进制 loader 的恢复识别、失败阻断与重试回归。
-# 依赖仓库 Tcl 实现及 tclsh；只模拟 UCLI 后门和仿真推进边界，不复制刷新实现。
-# 每个用例拥有独立解释器；退出时销毁，避免 initialized/命令表污染后续用例。
+# 真实源码/二进制 loader 的恢复识别、失败阻断与重试回归：只模拟 UCLI 后门和仿真推进边界，每个用例用独立解释器。
 set root [file normalize [file join [file dirname [info script]] .. ..]]
 set passed 0
 
-# 建立隔离 UCLI 替身并加载真实源码入口；返回解释器句柄，由调用方销毁。
-# 控制模块仍完整加载，只有推进/核对边界替换为事件记录；标量解码保持真实实现。
+# 控制模块完整加载，只把推进/核对边界换成事件记录；返回的解释器由调用方销毁。
 proc new_session {root} {
     set child [interp create]
     $child eval [list set ::env(AIP_CORE) $root]
@@ -15,8 +12,7 @@ proc new_session {root} {
         set ::ack 0
         set ::request 0
 
-        # 生产入口会保存原生 run；测试只允许通过已替换的推进边界记录调用。
-        # 若代码绕过该边界直接进入原生仿真推进，立即报错，不能静默通过。
+        # 任何绕过已替换推进边界的原生 run 都立即报错。
         proc run {args} { error "unexpected native run $args" }
 
         # 模拟后门读；命令枚举返回空表，其余未知访问报错，避免掩盖意外依赖。
@@ -69,7 +65,6 @@ proc new_session {root} {
     return $child
 }
 
-# 检查外部可见契约；失败立即非零退出，防止随后成功标记掩盖失败。
 proc check {name condition} {
     if {!$condition} { error "FAIL $name" }
     incr ::passed
@@ -125,8 +120,7 @@ foreach fault {missing empty malformed nonbit write readback} {
     interp delete $child
 }
 
-# 用临时占位库走真实二进制 loader 的定位流程；只替换 load，模拟旧库缺少刷新 helper。
-# 占位文件与解释器归本测试所有，成功或失败均清理；实际 .so 刷新由 VCS 集成回归验证。
+# 用临时占位库走真实二进制 loader 的定位流程，只替换 load 来模拟旧库缺少刷新 helper；实际 .so 刷新由 VCS 集成回归验证。
 set channel [file tempfile binary_root]
 close $channel
 file delete $binary_root
@@ -145,13 +139,9 @@ try {
             lappend ::events load
             set ::aip_tcl_embedded 1
             set ::_aip_bridge_started 1
-            # 旧版库的命令入口占位；测试不允许实际发命令。
             proc aip_send_cmd {args} { error "unexpected bridge command" }
-            # 独立启动脚本调用真实 loader 选择的 bootstrap 路径。
             proc _aip_advance {args} { lappend ::events advance }
-            # 旧版初始化允许完成普通控制核对。
             proc _aip_control_reconcile {} { lappend ::events reconcile }
-            # 命令表探测不影响本用例，返回空表。
             proc _aip_load_known_cmds {} {}
             # 捕获未知 helper 被路由至 SV 的错误路径，不能让 catch 隐藏它。
             proc unknown {args} { lappend ::events unknown; error "unexpected unknown $args" }

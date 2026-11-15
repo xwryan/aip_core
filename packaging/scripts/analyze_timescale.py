@@ -20,7 +20,6 @@ import sys
 # 匹配 `timescale <unit>/<precision>
 TS_RE = re.compile(r'^\s*`\s*timescale\s+([0-9]+\s*[a-z]+)\s*/\s*([0-9]+\s*[a-z]+)',
                    re.IGNORECASE | re.MULTILINE)
-# 匹配 `resetall
 RESETALL_RE = re.compile(r'^\s*`\s*resetall\b', re.IGNORECASE | re.MULTILINE)
 
 # .f 中需忽略的选项 (后面带文件路径但非源文件)

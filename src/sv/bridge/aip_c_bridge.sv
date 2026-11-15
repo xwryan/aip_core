@@ -1,44 +1,35 @@
-// src/sv/bridge：Socket/DPI-C 命令接入，将网络及文件输入转交公共命令调度器。
-// 依赖 aip_cmd.sv、aip_str 和 sv_socket_dpi.c；本对象拥有邮箱与监听/客户端
-// 句柄，客户端断开由 handler 关闭，stop 仅通知工作循环退出，不取消用户命令。
-// 执行线程持有每次 exec_result 的独立返回值；旧全局镜像只供兼容读取，不能
-// 用于组装 Socket 回复，否则后台 legacy task 可能造成串台或读到旧结果。
-// 用法：`aip_c_bridge_create(c_bridge, "127.0.0.1", 0, "commands.txt")`
-// 宏只建持久工作线程；Tcl 显式调用 <name>_listen 才打开监听。端口 0 由内核分配。
-// 只支持从未监听的快照恢复后启动，不恢复保存过的 OS socket/客户端状态。
+// Socket/DPI-C 命令接入：把网络与文件输入转交公共命令调度器（`aip_c_bridge_create(name, ip, port, file)）。
+// 宏只建持久工作线程，Tcl 显式调用 <name>_listen 才监听（端口 0 由内核分配）；只支持从未监听的快照恢复后启动。
+// Socket 回复只用每次 exec_result 的独立返回值：旧全局镜像会被后台 legacy task 串台。
 `ifndef AIP_C_BRIDGE_SV
 `define AIP_C_BRIDGE_SV
 
-// 建立监听 socket，失败返回负数；句柄由 bridge 持有。
 import "DPI-C" function int sv_socket_init(input string	ip, input int	port);
-// 获取 bind() 后的实际端口；port=0 时由内核动态分配，失败返回负数。
+// port=0 时返回内核分配的实际端口；失败返回负数。
 import "DPI-C" function int sv_socket_get_bound_port(input int	listen_fd);
-// 只回收本次启动失败的监听 fd，不触碰客户端；不提供 live socket 恢复或重启语义。
+// 只回收本次启动失败的 listener，不触碰客户端。
 import "DPI-C" function void sv_socket_abort_listener(input int	listen_fd);
 // 非阻塞接受连接：非负为客户端 fd，-1 错误、-2 暂无连接、-3 客户端已满。
 import "DPI-C" function int sv_socket_accept_nonblock(input int	listen_fd);
 // 非阻塞接收：正数为有效字节数，0 表示暂无数据，负数表示断连/错误。
 import "DPI-C" function int sv_socket_recv_nonblock(input int	fd, output byte	buff[1024], input int	maxlen);
-// 向客户端发送回复；保留 C 层返回码，当前协议不重试发送失败。
+// SV 层不再重试发送失败。
 import "DPI-C" function int sv_socket_send(input int	fd, input string	msg);
-// 释放已断开的客户端 socket；调用方不应继续使用其 fd。
 import "DPI-C" function void sv_socket_close(input int	fd);
-// 检查等待命令期间客户端 fd 是否仍有效，避免对已关闭连接回包。
+// 等待命令期间检查 fd 是否仍有效，避免对已关闭连接回包。
 import "DPI-C" function int sv_socket_is_valid_fd(input int	fd);
-// 每个仿真实例在 C 层生成一个 32 位认证 key；只有完成 auth 握手的
-// socket 才能进入命令队列。
+// 每个仿真实例在 C 层生成 32 位认证 key；只有完成 auth 握手的 socket 才能进入命令队列。
 import "DPI-C" function int sv_socket_is_authenticated(input int	fd);
 import "DPI-C" function int sv_socket_authenticate(input int	fd, input string	key_text);
 import "DPI-C" function string sv_socket_get_auth_key_text();
-// 在 VCS UCLI 提供的 MHPI 上下文中执行认证后的原始 Tcl 命令；实现位于
-// sv_socket_dpi.c，TCP 线程只串行调用，不直接链接 Tcl 运行库。
+// 在 VCS UCLI 的 MHPI 上下文中执行认证后的原始 Tcl 命令（由 TCP 线程串行调用）。
 import "DPI-C" function string sv_socket_eval_tcl(input string	script);
 
 // 输入线程只排队，单个执行线程按网络优先级调度；wait=0 由 aip_cmd 管理，
 // 不在传输层另建业务线程，以保持 Tcl/Socket/文件三种入口的一致语义。
 class aip_c_bridge;
 
-    // 按本次状态形成协议回复；已有 OK:/ERROR: 前缀保持原样，不重复包装。
+    // 已有 OK:/ERROR: 前缀保持原样，不重复包装。
     static function string format_response(int	st, string	msg);
         string	trimmed;
         trimmed = aip_str::strip(msg);
@@ -112,8 +103,7 @@ class aip_c_bridge;
         string	tcl_name;
         status = 0;
         result = "";
-        // 已注册 AIP 命令保留原调度与 wait=0 语义；未知名称转交 Tcl，允许通过
-        // 同一 TCP 通道使用 get/force 等 UCLI 命令及 aip_watch 等辅助函数。
+        // 未知名称转交 Tcl，使同一 TCP 通道可用 get/force 等 UCLI 命令及 aip_watch。
         aip_cmd::exec_result(request, SRC_SOCKET, status, result);
         if (status == -1 && result.len() >= 17 &&
             result.substr(0, 16) == "Unknown command: ") begin
@@ -129,7 +119,7 @@ class aip_c_bridge;
         end
     endtask
 
-    // 初始化连接配置和有界邮箱，不在构造函数派生线程，以兼容 VCS Q-2020。
+    // 不在构造函数中派生线程（VCS Q-2020 限制）。
     function new(string	ip = "127.0.0.1", int	port = 8888, string	file = "");
         this.listen_ip           = ip;
         this.listen_port         = port;
@@ -144,8 +134,8 @@ class aip_c_bridge;
         low_pri_mbox  = new(32);
     endfunction
 
-    // 仅启动持久等待/执行/文件线程，完全不创建 OS socket；重复调用不派生第二组线程。
-    // 由宏的 initial 持有这些线程，恢复后继续等待，避免 Tcl 命令作用域退出时杀掉 listener。
+    // 只启动持久等待/执行/文件线程，不建 OS socket，重复调用不派生第二组；线程归宏的 initial，
+    // 避免随 Tcl 命令作用域退出被杀。
     task start();
         if (workers_started) return;
         workers_started = 1;
@@ -156,9 +146,8 @@ class aip_c_bridge;
         join_none
     endtask
 
-    // 显式打开监听并返回实际 endpoint/auth；已有监听重复调用返回同一结果，无使能参数。
-    // 同步完成初始化后才发布 fd 唤醒持久线程；失败保持 fd=-1，保留文件执行并允许重试。
-    // 已 stop 的 bridge 不重启；保存过 live socket 的快照不属于本接口支持范围。
+    // 显式打开监听并返回 endpoint/auth（已监听则返回同一结果）；初始化完成后才发布 fd 唤醒持久线程，
+    // 失败保持 fd=-1 可重试。已 stop 的 bridge 不重启。
     task start_listener(output int	status, output string	result);
         int	new_fd;
         int	actual_port;
@@ -194,8 +183,7 @@ class aip_c_bridge;
         -> file_ctrl_ev;
     endtask
 
-    // initial 派生的持久监听线程先等待显式启动；初始无 socket、restore 后也不自动 bind。
-    // 接受连接产生的 handler 属于本线程。accept 错误只结束网络接收，不停止独立文件执行。
+    // 持久监听线程先等待显式启动（restore 后也不自动 bind）；accept 错误只结束网络接收，不停止文件执行。
     task automatic listener_thread();
         wait (listen_fd >= 0 || !run_sim);
         while (run_sim) begin
@@ -307,9 +295,7 @@ class aip_c_bridge;
         sv_socket_send(client_fd, reply);
     endtask
 
-    // 网络命令优先、文件命令次之；每次调用用局部状态/结果构造回复。
-    // wait=0 的 STARTED 立即返回，后续后台完成不会再次向 socket 发送结果。
-    // 兼容镜像经保护接口发布，legacy 全局返回槽被占用时允许跳过镜像写入。
+    // 网络命令优先、文件命令次之，每次用局部状态/结果构造回复；wait=0 的 STARTED 立即返回，后台完成不再回包。
     task automatic exec_thread();
         cmd_item_t	item;
         int			cmd_status;
@@ -342,8 +328,7 @@ class aip_c_bridge;
         `aip_info(("[AIP_C_BRIDGE] Exec thread ended"));
     endtask
 
-    // 按控制事件打开文件并逐行入低优先级邮箱；暂停/切换时关闭当前文件。
-    // 文件打开失败进入停止读取状态，不向执行线程提交无效内容。
+    // 按控制事件逐行读文件入低优先级邮箱；打开失败则停止读取，不提交无效内容。
     task automatic file_read_thread();
         int			fd;
         string		line;
@@ -397,7 +382,7 @@ endclass
 `define aip_c_bridge_create(name, ip, port, file="") \
     aip_c_bridge	name; \
     class \__aip_c_listen_``name extends aip_cmd; \
-        /* 显式无参启动，结果直接写本次命令实例；拒绝额外参数避免静默误用。 */ \
+        /* 拒绝额外参数，避免静默误用。 */ \
         task cmd_exec(); \
             if (aip_str::strip(this.args_in) != "") begin \
                 this.status = 1; \
@@ -407,7 +392,6 @@ endclass
                 this.result_out = "ERROR: C bridge is not initialized"; \
             end else name.start_listener(this.status, this.result_out); \
         endtask \
-        /* 注册对象常驻仿真及快照；实际 listener 的所有权仍归 module initial。 */ \
         function new(string	command_name); super.new(command_name); endfunction \
         static \__aip_c_listen_``name	__instance = new({`"name`", "_listen"}); \
     endclass \

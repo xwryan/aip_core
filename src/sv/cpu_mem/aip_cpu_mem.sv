@@ -1,37 +1,11 @@
-//===========================================================
-// aip_cpu_mem.sv — 多 CPU 多 region 内存抽象层
-//
-// 功能:
-//   - 用户单接口 cpu.write(addr, data, width)
-//   - 自动按地址路由 ROM / RAM / 其他 region
-//   - RAM 写入自动加 even parity (每 8 bit 1 bit)
-//   - 多 CPU 各自实例化, base_addr + path 互不影响
-//   - 每 region 持有 paths[blk][ram_id] 二维表, 支持任意 RTL 命名
-//
-// 物理拓扑 (示例):
-//   ROM    : 1 block × 2 ram × 2048 depth × 64-bit         = 32 KB
-//   CPU RAM: 62 block × 2 ram × 512 depth × 148-bit
-//            148-bit 行 = bits[3:0] 保留 + 72 even slot + 72 odd slot
-//            每 slot = 8 group × (8 data + 1 even parity) = 72 bit
-//            data 字节容量 = 62 × 0x4000 = 0xF8000 = 992 KB
-//
-// 依赖:
-//   aip_log    — `aip_info / `aip_warning / `aip_error
-//   aip_mem_ecc — xor_bits primitive
-//   uvm_pkg    — uvm_hdl_deposit / uvm_hdl_read
-//
-// 用法见 docs/cpu_mem/README.md
-//===========================================================
+// 多 CPU 多 region 内存抽象层：cpu.write/read 按地址路由到 ROM/RAM region，RAM 写入自动加 even parity；
+// 各 region 持有 paths[blk][ram_id] 二维 RTL 路径表，支持任意 RTL 命名。用法见 docs/cpu_mem/README.md。
 `ifndef AIP_CPU_MEM_SV
 `define AIP_CPU_MEM_SV
 
 import uvm_pkg::*;
 
-//============================================================
-// aip_cpu_region — 抽象基类
-//   持有 base/size + paths[blk][ram_id] 二维路径表
-//   子类实现 write_impl / read_impl
-//============================================================
+// region 抽象基类：持有 base/size 与 paths[blk][ram_id] 路径表，子类实现 write_impl/read_impl。
 virtual class aip_cpu_region;
     string           name;
     longint unsigned base;
@@ -72,24 +46,9 @@ virtual class aip_cpu_region;
     pure virtual task zero_all();
 endclass
 
-//============================================================
-// aip_cpu_ram_region — CPU 148-bit + even parity RAM
-//
-// 物理布局:
-//   每 block = 2 ram；每个逻辑 128-bit 行的低64存 u00 (ram0)，高64存 u01 (ram1)。
-//   每 ram = 512 row × 148 bit；偶/奇逻辑行共用一个物理 row。
-//   148-bit 行: bits[3:0] 保留, even slot 写 [4,6,...,146], odd slot 写 [5,7,...,147]
-//   每 slot 72 bit = 8 group × (parity[1] | data[7:0])
-//
-// 地址解码 (off = byte_addr - base):
-//   bof          = off % BLOCK_BYTES
-//   line_in_bank = bof / 16
-//   byte_in_line = bof % 16
-//   ram_id       = byte_in_line / 8  (0=ram0低64, 1=ram1高64)
-//   group_id     = byte_in_line % 8
-//   depth        = line_in_bank / 2
-//   slot_sel     = line_in_bank % 2  (0=even, 1=odd)
-//============================================================
+// CPU 148-bit + even parity RAM：每 block 2 个 ram，逻辑 128-bit 行的低 64 位存 u00(ram0)、高 64 位存 u01(ram1)；
+// 每 ram 512 row × 148 bit，偶/奇逻辑行共用一个物理 row：bits[3:0] 保留，even slot 用 [4,6,...,146]，
+// odd slot 用 [5,7,...,147]，每 slot 72 bit = 8 group × {parity, data[7:0]}。地址解码见 decode()。
 class aip_cpu_ram_region extends aip_cpu_region;
 
     int num_blocks;
@@ -109,7 +68,6 @@ class aip_cpu_ram_region extends aip_cpu_region;
         this.size       = num_blocks * BLOCK_BYTES;
     endfunction
 
-    // ---- 解码 ----
     function void decode(input  longint unsigned off,
                          output int blk,
                          output int ram_id,
@@ -130,7 +88,6 @@ class aip_cpu_ram_region extends aip_cpu_region;
         slot_sel     = line_in_bank % 2;        // 行号[0]: 0=偶lane(4,6..146) 1=奇lane(5,7..147)
     endfunction
 
-    // ---- 物理 row RMW ----
     task rd_row(input int blk, input int ram_id, input int depth,
                 output ram_word_t w);
         uvm_hdl_data_t d;
@@ -174,7 +131,7 @@ class aip_cpu_ram_region extends aip_cpu_region;
                           name, blk, ram_id, depth));
     endtask
 
-    // ---- 148-bit 行内 9-bit group 改写 ({even_parity, 8 data}) ----
+    // 改写 148-bit 行内的一个 9-bit group（{even_parity, 8 data}）。
     function ram_word_t splice_group(input ram_word_t w_in,
                                      input int slot_sel,
                                      input int group_id,
@@ -209,7 +166,6 @@ class aip_cpu_ram_region extends aip_cpu_region;
         return b;
     endfunction
 
-    // ---- byte 级 ----
     virtual task write_byte(input longint unsigned off, input bit [7:0] b);
         int blk, ram_id, depth, slot_sel, group_id;
         ram_word_t w;
@@ -240,7 +196,7 @@ class aip_cpu_ram_region extends aip_cpu_region;
         b = extract_group(w, slot_sel, group_id, parity_ok);
     endtask
 
-    // ---- 多字节: 按字节展开 (跨 slot/depth 边界自动处理) ----
+    // 按字节展开，自动跨越 slot/depth 边界。
     virtual task write_impl(input  longint unsigned off,
                             input  longint unsigned data,
                             input  int              width);
@@ -272,8 +228,7 @@ class aip_cpu_ram_region extends aip_cpu_region;
         status_ok = 1;
     endtask
 
-    // ---- 高效整 region 清零 ----
-    // 全 0 data 的 even parity = XOR(0) = 0 → 整行物理 148'd0
+    // 全 0 data 的 even parity 也为 0，故整行物理值为 148'd0。
     function ram_word_t make_zero_row();
         ram_word_t w = 0;
         for (int slot = 0; slot < 2; slot++)
@@ -297,7 +252,7 @@ class aip_cpu_ram_region extends aip_cpu_region;
                    name, total));
     endtask
 
-    // 按地址范围清零 (off 都是 region 内偏移). RMW 走 byte 路径
+    // off 为 region 内偏移；走 byte RMW 路径。
     task zero_range(input longint unsigned off_from, input longint unsigned off_to);
         for (longint unsigned a = off_from; a <= off_to; a++)
             write_byte(a, 8'h00);
@@ -332,11 +287,9 @@ class aip_cpu_ram_region extends aip_cpu_region;
             void'($fgets(line, fd));
             len = line.len();
             if (len == 0) continue;
-            // Strip trailing CR/LF
             while (len > 0 && (line[len-1] == 8'd10 || line[len-1] == 8'd13))
                 len--;
             if (len == 0) continue;
-            // @ADDR line
             if (line[0] == "@") begin
                 longint unsigned addr_val;
                 addr_val = 0;
@@ -623,21 +576,7 @@ class aip_cpu_ram72_region extends aip_cpu_ram_region;
     endtask
 endclass
 
-//============================================================
-// aip_cpu_rom_region — 纯 64-bit ROM, 无 parity
-//
-// 物理布局:
-//   每 block = 2 ram × 2048 row × 64-bit。
-//   每条逻辑 128-bit 行的低64存 ram0/uu0，高64存 ram1/uu1。
-//
-// 地址解码 (off = byte_addr - base):
-//   blk          = off / 0x8000
-//   bof          = off % 0x8000
-//   depth        = bof / 16
-//   byte_in_line = bof % 16
-//   ram_id       = byte_in_line / 8
-//   byte_in_word = byte_in_line % 8
-//============================================================
+// 纯 64-bit ROM（无 parity）：每 block 2 ram × 2048 row × 64-bit，逻辑 128-bit 行的低 64 位存 ram0/uu0、高 64 位存 ram1/uu1。
 class aip_cpu_rom_region extends aip_cpu_region;
 
     int num_blocks;
@@ -771,7 +710,6 @@ class aip_cpu_rom_region extends aip_cpu_region;
         end
     endtask
 
-    // ---- 高效整 region 清零 ----
     virtual task zero_all();
         rom_word_t zw;
         int total;
@@ -809,9 +747,7 @@ class aip_cpu_rom_region extends aip_cpu_region;
                    name, off_from, off_to));
     endtask
 
-    // ---- 从 hex 文件加载 firmware ----
-    // Supports Verilog hex format: @ADDR directives + whitespace-separated hex bytes.
-    // Matches aip_cpu_ram_region::load_hex (compatible with objcopy -O verilog output).
+    // Verilog hex (@ADDR + whitespace-separated bytes), compatible with the RAM load_hex and objcopy -O verilog.
     task load_hex(input string filename, input longint unsigned addr_off = 0);
         int fd;
         string line;
@@ -885,11 +821,7 @@ class aip_cpu_rom_region extends aip_cpu_region;
     endtask
 endclass
 
-//============================================================
-// aip_cpu_mem — facade
-//   持有 regions[$], 按 addr 自动路由
-//   提供注册便利方法 (单 path / 模板 / 显式)
-//============================================================
+// facade：持有 regions[$] 并按地址路由，提供单 path/模板/显式 region 注册方法。
 class aip_cpu_mem;
 
     aip_cpu_region regions[$];
@@ -906,7 +838,6 @@ class aip_cpu_mem;
         image_load_lock = new(1);
     endfunction
 
-    // ---------- region 注册 ----------
     function void add_region(aip_cpu_region r);
         foreach (regions[i]) begin
             if (!(r.base + r.size <= regions[i].base ||
@@ -921,7 +852,7 @@ class aip_cpu_mem;
                    r.name, r.base, r.size, r.base + r.size - 1));
     endfunction
 
-    // ---------- ROM: 1 块, 显式 2 path ----------
+    // ROM：1 块，显式给出 2 个 path。
     function aip_cpu_rom_region add_rom(
         input string           name,
         input longint unsigned base,
@@ -935,8 +866,7 @@ class aip_cpu_mem;
         return r;
     endfunction
 
-    // ---------- ROM: 1 块, RTL 带索引名 (如 dut.rom[3].uu0) ----------
-    // ram0/ram1_path_fmt 含 %0d, blk_id 注入
+    // ROM：1 块，RTL 带索引名（如 dut.rom[3].uu0）；ram0/ram1_path_fmt 含 %0d，注入 blk_id。
     function aip_cpu_rom_region add_rom_id(
         input string           name,
         input longint unsigned base,
@@ -951,8 +881,7 @@ class aip_cpu_mem;
         return r;
     endfunction
 
-    // ---------- RAM: 多 block, 模板拼路径 ----------
-    // blk_id_offset: RTL 索引起始值 (默认 0). 如 RTL 是 blk[2..63], offset=2
+    // RAM：多 block 模板拼路径；blk_id_offset = RTL 索引起始值（如 RTL 为 blk[2..63] 则取 2）。
     function aip_cpu_ram_region add_ram_fmt(
         input string           name,
         input longint unsigned base,
@@ -984,7 +913,7 @@ class aip_cpu_mem;
         return r;
     endfunction
 
-    // ---------- RAM: 不规整命名, 空创建 + 用户手填 ----------
+    // RAM：不规整命名，空创建后由用户手填 paths。
     function aip_cpu_ram_region add_ram_empty(
         input string           name,
         input longint unsigned base,
@@ -995,7 +924,7 @@ class aip_cpu_mem;
         return r;
     endfunction
 
-    // ---------- ROM 多块情况, 模板版 ----------
+    // ROM 多块，模板版。
     function aip_cpu_rom_region add_rom_fmt(
         input string           name,
         input longint unsigned base,
@@ -1013,14 +942,12 @@ class aip_cpu_mem;
         return r;
     endfunction
 
-    // ---------- 路由 ----------
     function aip_cpu_region find(input longint unsigned addr);
         foreach (regions[i])
             if (regions[i].contains(addr)) return regions[i];
         return null;
     endfunction
 
-    // ---------- 用户统一接口 ----------
     task write(input longint unsigned addr,
                input longint unsigned data,
                input int              width = 64);
@@ -1058,7 +985,6 @@ class aip_cpu_mem;
         r.read_impl(addr - r.base, data, width, status_ok);
     endtask
 
-    // ---------- 便利接口: 显式 8/32/64 宽度 ----------
     task write8 (input longint unsigned addr, input bit [7:0]  data);
         write(addr, longint'(data),  8);
     endtask
@@ -1091,7 +1017,6 @@ class aip_cpu_mem;
         data = tmp;
     endtask
 
-    // ---------- 块批量 ----------
     task write_block(input longint unsigned addr,
                      input longint unsigned data[$],
                      input int              width = 64);
@@ -1117,7 +1042,6 @@ class aip_cpu_mem;
         for (int i = 0; i < nbytes; i++) write8(addr + i, 8'h00);
     endtask
 
-    // ---------- 整 region 清零 (调子类高效实现) ----------
     task zero_region(input string region_name);
         bit found = 0;
         foreach (regions[i]) begin
@@ -1131,13 +1055,12 @@ class aip_cpu_mem;
             `aip_error(("aip_cpu_mem::zero_region: '%s' not found", region_name));
     endtask
 
-    // ---------- 所有 region 清零 ----------
     task zero_all();
         foreach (regions[i]) regions[i].zero_all();
         `aip_info(("aip_cpu_mem::zero_all: %0d region cleared", regions.size()));
     endtask
 
-    // ---------- 按地址范围清零 (跨 region 自动分段) ----------
+    // 跨 region 自动分段。
     task zero_range(input longint unsigned addr_from, input longint unsigned addr_to);
         aip_cpu_region r;
         aip_cpu_ram_region rr;
@@ -1168,7 +1091,6 @@ class aip_cpu_mem;
         for (int i = 0; i < count; i++) write(addr + i*step, start_v + i, width);
     endtask
 
-    // ---------- 调试 ----------
     function void dump_map();
         $display("================ aip_cpu_mem map ================");
         $display(" %-12s %-12s %-12s %-12s", "NAME", "BASE", "SIZE", "END");

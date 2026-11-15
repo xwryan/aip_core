@@ -1,27 +1,22 @@
-// tests/sv：旧字符串命令注册语法与全局返回值业务的同步兼容门禁。
-// 依赖 AIP package；宏创建的注册对象由框架持有到仿真结束，测试仅检查
-// 公开句柄与兼容镜像。业务 task 刻意保留直接写全局变量的旧代码，不能
-// 全部换成新 set_result 后误称旧业务兼容；逐调用上下文另有专门测试。
+// 旧字符串命令注册语法与全局返回值的同步兼容测试；业务 task 刻意保留直接写全局变量的旧写法。
 `include "aip_core_pkg.sv"
 
-// 保留旧业务返回约定，覆盖八种字符串宏的实参映射和缺省结果清理。
+// 覆盖八种字符串宏的实参映射和缺省结果清理。
 class str_result_ops;
-    // 返回一个字符串实参及非零状态，证明兼容结果没有被默认成功覆盖。
+    // 非零状态证明兼容结果未被默认成功覆盖。
     static task s1(string a);
         aip_cmd::__aip_cmd_last_status = 7;
         aip_cmd::__aip_cmd_last_result = {"s1:", a};
     endtask
-    // 返回两个字符串，区分参数位置和各自缺省值。
     static task s2(string a, string b);
         aip_cmd::__aip_cmd_last_status = 8;
         aip_cmd::__aip_cmd_last_result = {"s2:", a, ",", b};
     endtask
-    // 返回字符串与整数，验证原有整数转换及参数顺序。
     static task s1i(string a, int n);
         aip_cmd::__aip_cmd_last_status = 9;
         aip_cmd::__aip_cmd_last_result = $sformatf("s1i:%s,%0d", a, n);
     endtask
-    // 返回整数与字符串，验证混合宏与 string-first 宏没有混用实参顺序。
+    // 验证 int-first 与 string-first 宏没有混用实参顺序。
     static task i1s(int n, string a);
         aip_cmd::__aip_cmd_last_status = 10;
         aip_cmd::__aip_cmd_last_result = $sformatf("i1s:%0d,%s", n, a);
@@ -50,12 +45,10 @@ endclass
                           a, "default_a", b, "default_b", duration, "default_span")
 `aip_cmd_str_1i_status(t_silent_status, str_result_ops::silent, a, "")
 
-// 不启动 UVM 环境；覆盖公共调度入口和旧 handle.cmd_exec 顺序入口，
-// 结束前汇总所有断言。直接入口不具备并发调度能力，测试不并发改写 args_in。
+// 覆盖公共调度入口与旧 handle.cmd_exec 顺序入口；直接入口无并发调度能力，测试不并发改写 args_in。
 module test_cmd_str_result;
     int fails = 0;
 
-    // 汇总失败而不提前退出，最终非零 fatal 保证外层 runner 不漏报。
     task automatic check(string name, bit cond);
         if (cond) $display("[PASS] %s", name);
         else begin
@@ -78,8 +71,7 @@ module test_cmd_str_result;
         check({name, " mirror result"}, aip_cmd::__aip_cmd_last_result == expected_result);
     endtask
 
-    // 旧 loader 测试直接设置 args_in 后调用 cmd_exec；宏需要临时建立并释放
-    // 上下文，同时保留 handle 与 legacy 全局结果，不能把调用改成要求调度器。
+    // 模拟旧 loader 直接设 args_in 后调用 cmd_exec：宏须临时建立并释放上下文，不能要求经过调度器。
     task automatic direct_invoke(string name, string arguments,
                                  int expected_status, string expected_result);
         aip_cmd handle;
@@ -147,7 +139,7 @@ module test_cmd_str_result;
         aip_cmd::exec("t_s3_time", SRC_INTERNAL);
         check_handle("t_s3_time", 11, "s3:default_a,default_b,default_span");
 
-        // 全八种旧宏都保留顺序 direct 调用；状态宏也必须清理 silent 缺省值。
+        // 八种旧宏都保留顺序 direct 调用；状态宏也必须清理 silent 缺省值。
         direct_invoke("t_s1", "a=direct", 7, "s1:direct");
         direct_invoke("t_s2", "a=direct b=two", 8, "s2:direct,two");
         direct_invoke("t_s1i", "a=direct n=5", 9, "s1i:direct,5");

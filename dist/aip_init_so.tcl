@@ -1,21 +1,9 @@
-# dist：二进制 Tcl 加载入口，负责.so装载后的SV启动与恢复状态核对。
-# load本身只定义控制/观察/命令函数，不推进仿真；初次握手独立执行。
-# 重复source不改活动调用，restore清空命令后重新加载并核对孤立桥状态。
-# 恢复参数源必须在 load 返回后、任何 bootstrap/reconcile 前失效；失败 pending 保留供重试。
-# AIP binary Tcl loader: the command implementation comes from
-# lib/libaip_tcl_bridge.so instead of the src/tcl/*.tcl sources.
-#
-# Usage from a UCLI/Tcl script:
-#   source /path/to/aip_core/dist/aip_init_so.tcl
-#
-# Requires `make -C dist tcl` (or `all`) and a VCS UCLI session: the extension
-# evaluates its embedded Tcl through the UCLI API and does nothing elsewhere.
-# The same ::aip_initialized / ::aip_init_root contract as aip_init.tcl.
+# 二进制 Tcl 加载入口：实现来自 lib/libaip_tcl_bridge.so（需 make -C dist tcl），仅在 VCS UCLI 中有效。
+# load 只定义命令、不推进仿真，初次握手单独执行；restore 后重新加载并核对孤立桥状态。
+# 与 aip_init.tcl 同一 ::aip_initialized / ::aip_init_root 契约。
 
-# 定位 loader 自身目录：优先使用 Tcl 文件元数据，再读取可确定的 source 字面参数。
-# VCS 可能缺少文件元数据；此时只按 Tcl list 解码单条 source（含 -encoding），
-# 支持引号/花括号中的空格，不执行 frame cmd、变量替换或命令替换。
-# 动态表达式路径由 AIP_CORE fallback 支持；所有候选规范化去重，保留原优先级。
+# 定位 loader 目录：优先用文件元数据；VCS 缺元数据时只按 Tcl list 解码单条字面 source 命令（绝不 eval），
+# 动态路径靠 AIP_CORE fallback。
 proc _aip_init_so_locate {} {
     set cands {}
     catch {

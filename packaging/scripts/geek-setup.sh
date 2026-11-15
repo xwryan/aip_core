@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
-# geek-setup.sh — one-click manager for the geek bash config.
-#   install    install CLI tools + write ~/.geekrc.sh + wire ~/.bashrc
-#   disable    turn the config OFF (unwire ~/.bashrc, keep files & tools)
-#   enable     turn it back ON
-#   uninstall  unwire + remove ~/.geekrc.sh + apt-remove ONLY tools this script installed
-#   status     show current state
+# geek-setup.sh — one-click manager for the geek bash config: install|disable|enable|uninstall|status.
 set -uo pipefail
 
 SELF="$(readlink -f "${BASH_SOURCE[0]:-$0}")"   # this script's real path (follows symlink)
@@ -27,7 +22,6 @@ backup_bashrc() {
   cp -a "$BASHRC" "$b" && log "backed up bashrc -> $b"
 }
 
-# ---- write the config file -------------------------------------------------
 write_geekrc() {
   cat > "$GEEKRC" <<'GEEKEOF'
 # ~/.geekrc.sh — geek bash config (managed by geek-setup.sh).
@@ -152,7 +146,6 @@ GEEKEOF
   log "wrote $GEEKRC"
 }
 
-# ---- bashrc wiring ---------------------------------------------------------
 clean_bashrc() {   # remove marker block + any legacy lines
   [ -f "$BASHRC" ] || return 0
   sed -i "/^${BEGIN}$/,/^${END}$/d" "$BASHRC"
@@ -164,7 +157,6 @@ wire_bashrc() {
   log "wired source line into $BASHRC"
 }
 
-# ---- shortcut: ~/.local/bin/geek -> this script -----------------------------
 link_shortcut() {
   mkdir -p "$(dirname "$SHORTCUT")"
   ln -sf "$SELF" "$SHORTCUT" && log "shortcut: $SHORTCUT -> $SELF"
@@ -177,7 +169,6 @@ unlink_shortcut() {
   fi
 }
 
-# ---- tools -----------------------------------------------------------------
 need_sudo() { if [ "$(id -u)" -ne 0 ]; then SUDO="sudo"; else SUDO=""; fi; }
 install_tools() {
   command -v apt-get >/dev/null || { warn "no apt-get; skip tool install"; return 0; }
@@ -207,7 +198,6 @@ remove_tools() {
   : > "$STATE_PKGS"
 }
 
-# ---- commands --------------------------------------------------------------
 cmd_install()  { install_tools; write_geekrc; wire_bashrc; link_shortcut
                  log "DONE. Apply now:  source ~/.bashrc   (or open a new bash)"; }
 cmd_enable()   { [ -f "$GEEKRC" ] || write_geekrc; wire_bashrc; log "config ON. source ~/.bashrc"; }

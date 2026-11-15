@@ -1,57 +1,39 @@
 `ifndef AIP_WAIT_POLICY_SV
 `define AIP_WAIT_POLICY_SV
 
-// ============================================================================
-// aip_wait_policy
-//
-// 目录/层次：src/sv/util；由 aip_core_pkg 统一 include，依赖 UVM 与 aip_cmdline（aip_int）。
-// 职责：各项目共用的等待/超时策略对象，迁自 virtio_net_vip 的 virtio_wait_policy 通用部分。
-//   所有等待都应经过本类，禁止裸 #delay；项目专用的场景超时由子类增加字段。
-// 规则：
-//   - fork 全部命名，只 disable 具名块，绝不使用 "disable fork"，避免误杀调用方的并行线程；
-//   - 轮询间隔钳位到 >=1ns；max_poll_attempts 是第二道防挂死保护，仿真时间不推进时也能退出；
-//   - 实际超时 = 基准值 × timeout_multiplier（饱和乘法），一处放大即可整体放宽（真实 DUT/压力测试）；
-//   - 超时统一报 uvm_error("WAIT_POLICY")，调用方凭 ref 标志或返回值判断成功/超时。
-// 参数：load_params(path) 用 aip_int 读取 <path>.poll_ns / timeout_ns / multiplier / max_polls（ns）；
-//   缺省保留当前字段值，先校验全部范围再提交，非法值（0、负数或超过 32 位）立即 fatal；
-//   运行中的等待不会因 Tcl set_param 自动改变，需重新 load_params。
-// 时间单位：所有时间差都在本类作用域内用 $realtime 计算并除以 1ns，与调用方 package 的
-//   timeunit 无关；自行轮询的调用方必须用 wait_start() 取起点，不要传入自己作用域的 $realtime。
-// 所有权/生命周期：策略数值归 test/config；等待线程归调用者。
-// ============================================================================
+// 各项目共用的等待/超时策略：所有等待都应经过本类而非裸 #delay，项目专用超时由子类加字段。
+// 时间差均在本类作用域按 $realtime/1ns 计算，与调用方 timeunit 无关。
+// fork 均具名且只 disable 具名块（不用 disable fork），避免误杀调用方的并行线程。
 class aip_wait_policy extends uvm_object;
     `uvm_object_utils(aip_wait_policy)
 
-    int unsigned default_poll_interval_ns = 10;      // 默认轮询间隔
-    int unsigned default_timeout_ns       = 10000;   // 默认基准超时 10us
+    int unsigned default_poll_interval_ns = 10;
+    int unsigned default_timeout_ns       = 10000;
     int unsigned timeout_multiplier       = 1;       // 全局倍率：>1 时放大全部超时
     int unsigned max_poll_attempts        = 10000;   // 迭代上限：时间不推进时防挂死
 
-    // 构造函数：各字段用声明处默认值；测试可在 build 阶段直接改写字段或调用 load_params。
     function new(string name = "aip_wait_policy");
         super.new(name);
     endfunction
 
-    // 读取 <path>.poll_ns/timeout_ns/multiplier/max_polls；子类覆盖时先调用 super 再读自有字段。
+    // 全部参数校验通过才提交；运行中的等待不随 set_param 改变。子类覆盖时先调 super。
     extern virtual function void load_params(string path = "aip.wait");
-    // 复制策略数值，供每个使用者独立持有；不复制等待线程或事件。
     extern virtual function void do_copy(uvm_object rhs);
-    // 返回基准超时乘以倍率，超过 32 位时饱和；程序化旧配置的 0 倍率按 1 处理。
+    // 32 位饱和；倍率 0 按 1 处理。
     extern function int unsigned effective_timeout(int unsigned base_ns);
-    // 自行轮询的调用方取等待起点（本类作用域的 $realtime）。
+    // 自行轮询须用它取起点，不要传调用方作用域的 $realtime。
     extern function realtime wait_start();
-    // 距离 start 起算的有效超时还剩多少 ns；已超时返回 <=0。
+    // 已超时返回 <=0。
     extern function realtime time_left_ns(realtime start, int unsigned base_timeout_ns);
-    // 时间或次数上限是否已到；只判断不报错，由调用方带业务上下文报告。
+    // 只判断不报错，由调用方带业务上下文报告。
     extern function bit deadline_reached(realtime start, int unsigned base_timeout_ns,
                                          int unsigned attempts);
-    // 等待一轮统一轮询间隔，不超过调用者的剩余预算；不报告超时。
+    // 不超过剩余预算；不报告超时。
     extern task wait_poll_interval(realtime remaining);
-    // 轮询 ref 标志直到置位或超时（标志由调用方的其他线程更新）。
+    // 时间上限 + 次数上限双重保护，仿真时间不推进时也能退出。
     extern task poll_until_flag(string description, int unsigned timeout_ns,
                                 int unsigned poll_interval_ns, ref bit success_flag,
                                 ref bit timed_out);
-    // 等待 uvm_event 触发或超时，先到者为准。
     extern task wait_event_or_timeout(string description, uvm_event evt,
                                       int unsigned timeout_ns, ref bit triggered);
     // 事件等待加轮询兜底：事件可能已触发或被错过时使用。
@@ -108,7 +90,6 @@ function int unsigned aip_wait_policy::effective_timeout(int unsigned base_ns);
     int unsigned	mult;
 
     mult = (timeout_multiplier == 0) ? 1 : timeout_multiplier;
-    // 饱和乘法：结果会溢出 32 位时返回最大值。
     if (base_ns > (32'hFFFF_FFFF / mult))
         return 32'hFFFF_FFFF;
     return base_ns * mult;
@@ -130,7 +111,6 @@ function bit aip_wait_policy::deadline_reached(realtime start, int unsigned base
     return (time_left_ns(start, base_timeout_ns) <= 0) || (attempts >= max_poll_attempts);
 endfunction
 
-// 单次延时总为正且有上界；零/负预算直接返回，外层据此结束等待。
 task aip_wait_policy::wait_poll_interval(realtime remaining);
     realtime	interval_ns;
 
@@ -140,7 +120,6 @@ task aip_wait_policy::wait_poll_interval(realtime remaining);
     #(interval_ns * 1ns);
 endtask
 
-// 双重保护：1) effective_timeout 时间上限；2) max_poll_attempts 迭代上限。
 task aip_wait_policy::poll_until_flag(string description, int unsigned timeout_ns,
                                       int unsigned poll_interval_ns, ref bit success_flag,
                                       ref bit timed_out);
@@ -185,7 +164,6 @@ task aip_wait_policy::poll_until_flag(string description, int unsigned timeout_n
         UVM_HIGH)
 endtask
 
-// 具名 fork，只 disable 本块。
 task aip_wait_policy::wait_event_or_timeout(string description, uvm_event evt,
                                             int unsigned timeout_ns, ref bit triggered);
     int unsigned	eff_timeout;
@@ -217,7 +195,6 @@ task aip_wait_policy::wait_event_or_timeout(string description, uvm_event evt,
     end
 endtask
 
-// 每轮最多等待一个轮询间隔，再检查总超时；事件已触发时立即返回。
 task aip_wait_policy::wait_event_or_poll(string description, uvm_event evt,
                                          int unsigned timeout_ns, int unsigned poll_interval_ns,
                                          ref bit triggered);

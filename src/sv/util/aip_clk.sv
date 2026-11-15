@@ -1,55 +1,42 @@
-// ==============================================
-// AIP 时钟生成器 - 高精度、可配置、支持即时停止
-// 依赖：aip_log, aip_time
-// ==============================================
+// 高精度可配置时钟生成器（直接频率/PLL、ppm、相位、占空比、抖动），支持即时停止。
 `ifndef AIP_CLK_SV
 `define AIP_CLK_SV
 
-// 强制 1ps 精度，保证亚 ns 半周期/相位/抖动精确
 `timescale 1ns/1fs  // 精度 1fs：亚 ps 半周期（如 10.3125GHz 串行钟）不被截断
 
-// 时钟接口
 interface aip_clk_if;
    logic clk;
 endinterface
 
-// 高精度时钟生成器类
 class aip_clk;
-   // 公共只读属性（可通过方法修改）
    protected string name;
    protected virtual aip_clk_if vif;
 
-   // 频率配置
    protected bit pll_mode = 0;            // 0:直接频率, 1:PLL模式
    protected real base_freq_mhz = 1.0;    // 基准频率（MHz）
-   protected int mul = 1;                 // 乘数
-   protected int div = 1;                 // 除数
+   protected int mul = 1;
+   protected int div = 1;
    protected real target_freq_mhz = 1.0;  // 直接目标频率（MHz）
 
-   // 精度与相位
    protected real ppm = 0;                // 百万分比误差（±）
    protected real phase_delay_ns = 0;     // 初始相位延迟（ns）
    protected real duty_cycle = 0.5;       // 占空比（0~1）
 
-   // PLL行为仿真参数
    protected real lock_time_ns = 0;       // 模拟PLL锁定时间（ns）
    protected real jitter_rms_ns = 0;      // 抖动均方根（ns）
-   protected int seed = 100;              // 随机种子
+   protected int seed = 100;
 
-   // 内部状态
    protected real period_ns;              // 实际时钟周期（ns）
    protected real actual_freq_mhz;        // 实际频率（MHz）
-   protected bit running = 0;             // 生成器运行标志
+   protected bit running = 0;
    protected event stop_event;            // 停止事件（用于即时中断延时）
 
-   // 构造函数
    function new(string name, virtual aip_clk_if vif);
       this.name = name;
       this.vif = vif;
       recalc_period();
    endfunction
 
-   // ---------- 状态查询接口 ----------
    function bit is_running();
       return running;
    endfunction
@@ -66,7 +53,6 @@ class aip_clk;
       return name;
    endfunction
 
-   // ---------- 私有方法：重新计算周期（单位：ns）----------
    protected function void recalc_period();
       real nom_freq_mhz;
       if (pll_mode) begin
@@ -83,8 +69,6 @@ class aip_clk;
       end
    endfunction
 
-   // ---------- 公共配置方法 ----------
-   // 设置直接频率（单位：Hz）
    function void set_freq(real freq_hz);
       if (freq_hz <= 0) begin
          `aip_nerror(this.name, ("frequency must be positive"));
@@ -95,7 +79,7 @@ class aip_clk;
       recalc_period();
    endfunction
 
-   // 设置PLL参数（乘数M，除数D，基准频率可选，单位：Hz）
+   // 乘数 M、除数 D；base_hz 可选（Hz）。
    function void set_pll_params(int m, int d, real base_hz = 0);
       if (d == 0) begin
          `aip_nerror(this.name, ("divider cannot be zero"));
@@ -114,13 +98,11 @@ class aip_clk;
       recalc_period();
    endfunction
 
-   // 设置PPM值
    function void set_ppm(real value);
       ppm = value;
       recalc_period();
    endfunction
 
-   // 设置占空比
    function void set_duty_cycle(real dc);
       if (dc <= 0.0 || dc >= 1.0) begin
          `aip_nerror(this.name, ("duty cycle must be in (0, 1), got %0.3f", dc));
@@ -129,7 +111,6 @@ class aip_clk;
       duty_cycle = dc;
    endfunction
 
-   // 设置相位延迟（秒）
    function void set_phase(real delay_sec);
       if (delay_sec < 0) begin
          `aip_nwarning(this.name, ("phase delay negative, setting to 0"));
@@ -139,7 +120,7 @@ class aip_clk;
       end
    endfunction
 
-   // 设置相位角度（度），基于当前周期
+   // 基于当前周期换算。
    function void set_phase_deg(real deg);
       if (period_ns <= 0) begin
          `aip_nerror(this.name, ("cannot set phase angle when period is invalid"));
@@ -148,18 +129,16 @@ class aip_clk;
       phase_delay_ns = (deg / 360.0) * period_ns;
    endfunction
 
-   // 设置PLL锁定时间（秒）
+   // 单位：秒。
    function void set_lock_time(real t);
       lock_time_ns = t * 1e9;
    endfunction
 
-   // 设置抖动（RMS，秒）
    function void set_jitter(real rms_sec, int new_seed = -1);
       jitter_rms_ns = rms_sec * 1e9;
       if (new_seed >= 0) seed = new_seed;
    endfunction
 
-   // ---------- 运行时动态调整 ----------
    task rephase(real new_delay_sec);
       if (running) begin
          stop();
@@ -182,7 +161,6 @@ class aip_clk;
       end
    endtask
 
-   // ---------- 启停控制 ----------
    task start();
       if (running) begin
          `aip_nwarning(this.name, ("already running"));
@@ -204,7 +182,6 @@ class aip_clk;
       -> stop_event;
    endtask
 
-   // ---------- 等待沿（带超时）----------
    task wait_for_posedge(time timeout = 0);
       fork
          begin
@@ -231,7 +208,6 @@ class aip_clk;
       disable fork;
    endtask
 
-   // ---------- 多时钟同步启动 ----------
    static task start_all(aip_clk clks[]);
       event sync;
       foreach (clks[i]) begin
@@ -244,13 +220,8 @@ class aip_clk;
       -> sync;
    endtask
 
-   // ---------- 内部运行任务 ----------
-   // 相位累加器（DDS 式）：消除逐半周期取整的
-   // 系统性频偏。旧实现每个半周期独立做 real->realtime 取整，凡半周期
-   // 不是精度单位整数倍的频率都有 ~精度/半周期 量级频偏（1fs 精度下
-   // 10.3GHz 约 10~20ppm）。此版记录"理想累计相位"，每拍延时 =
-   // 理想目标时刻 - 当前实际时刻，取整误差不累积（恒 <1 个精度单位）。
-   // 抖动只偏移上升沿目标时刻，不进入相位累加器，同样不累积。
+   // 相位累加器（DDS 式）：每拍延时 = 理想累计时刻 - 当前实际时刻，取整误差不累积（恒 < 1 个精度单位），避免
+   // 逐半周期取整造成的系统性频偏（1fs 精度下 10.3GHz 约 10~20ppm）；抖动只偏移上升沿目标，同样不累积。
    protected task run();
       real high_ns, low_ns;
       real jitter_ns;
@@ -261,7 +232,6 @@ class aip_clk;
       // 立即拉 0，避免 lock/phase 期间 X 态泄露
       vif.clk = 0;
 
-      // 模拟PLL锁定时间
       if (lock_time_ns > 0) begin
          fork
             aip_time::delay_ns(lock_time_ns);
@@ -271,7 +241,6 @@ class aip_clk;
          if (!running) return;
       end
 
-      // 初始相位延迟
       if (phase_delay_ns > 0) begin
          fork
             aip_time::delay_ns(phase_delay_ns);
@@ -284,12 +253,12 @@ class aip_clk;
       base_ns  = aip_time::get_sim_time("ns");
       ideal_ns = 0.0;
 
-      // 主循环：生成时钟（所有沿对齐理想相位网格）
+      // 所有沿对齐理想相位网格。
       while (running) begin
          high_ns = period_ns * duty_cycle;
          low_ns  = period_ns * (1.0 - duty_cycle);
 
-         // 生成抖动（高斯分布）
+         // 高斯分布抖动。
          if (jitter_rms_ns > 0.0) begin
             jitter_ns = $dist_normal(seed, 0, jitter_rms_ns * 1000) / 1000.0;
             // 保护：确保两个半周期都不为负
@@ -332,11 +301,7 @@ class aip_clk;
    endtask
 endclass
 
-// ========================== 宏封装 ==========================
-
-// 快速生成时钟（接口 + 实例 + 配置 + 启动）
-// 用法：`aip_clk_create(clk0, 100e6)
-// 用法：`aip_clk_create(clk0, 100e6, 50, 10e-9)
+// 快速生成时钟（接口 + 实例 + 配置 + 启动）：`aip_clk_create(clk0, 100e6[, ppm, phase_sec])
 `define aip_clk_create(name, freq_hz, ppm=0, phase_sec=0) \
    aip_clk_if name``_if(); \
    aip_clk name; \
@@ -348,8 +313,7 @@ endclass
       name.start(); \
    end
 
-// 完整版（频率 + ppm + 相位 + 占空比 + 抖动）
-// 用法：`aip_clk_create_full(clk0, 100e6, 50, 0, 0.5, 1e-12)
+// 完整版（频率/ppm/相位/占空比/抖动）：`aip_clk_create_full(clk0, 100e6, 50, 0, 0.5, 1e-12)
 `define aip_clk_create_full(name, freq_hz, ppm=0, phase_sec=0, duty=0.5, jitter_sec=0) \
    aip_clk_if name``_if(); \
    aip_clk name; \
@@ -363,7 +327,7 @@ endclass
       name.start(); \
    end
 
-// ---------- 配置宏（在 initial 块内使用）----------
+// 配置宏（在 initial 块内使用）
 // 设置抖动：`aip_clk_jitter(clk0, 1e-12)
 `define aip_clk_jitter(name, rms_sec, seed=-1) \
    name.set_jitter(rms_sec, seed);

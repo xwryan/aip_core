@@ -1,12 +1,5 @@
-//===========================================================
-// 所属层次：src/sv/core/cmdline（内部 include 片段，不是独立 compilation unit）。
-// 旧版 standalone 自测模块 test_param_parser_full；从原聚合文件等价迁出。
-// 仅由聚合入口在 AIP_CMDLINE_TEST 定义时加载，依赖已加载的公共宏和解析类。
-// 模块持有测试变量，initial 顺序执行并结束仿真；此旧开关不用于 aip_core_pkg 的包内入口。
-// 只允许 aip_cmdline.sv 在其 include 窗口加载；拒绝直接包含，避免创建第二份 $unit/package 类型。
-// 聚合入口持有唯一的 AIP_CMDLINE_SV 防重入 guard，本文件不声明新的 package。
-// 本次仅按职责迁移定义，原有函数实现和宏展开语句保持不变。
-//===========================================================
+// 旧 standalone 自测模块 test_param_parser_full，仅在 AIP_CMDLINE_TEST 下由 aip_cmdline.sv 的 include 窗口加载；
+// 拒绝直接包含，避免创建第二份 $unit/package 类型。
 `ifndef AIP_CMDLINE_INTERNAL_INCLUDE
 `AIP_CMDLINE_INTERNAL_INCLUDE_ERROR__USE_AIP_CMDLINE_SV
 `else
@@ -138,7 +131,6 @@ module test_param_parser_full;
         foreach (sarray[i]) $write("%0d ", sarray[i]);
         $display("");
 
-        // ========== 测试11：real 类型 ==========
         $display("\n=====================================");
         $display("========== 测试11：real参数 ==========");
         $display("=====================================");
@@ -151,7 +143,6 @@ module test_param_parser_full;
         `aip_real("", real_list, 0.0)
         $display("real_list (0.8,0.9,1.0) → %g", real_list);
 
-        // ========== 测试12：real 数组 ==========
         $display("\n=====================================");
         $display("========== 测试12：real数组 ==========");
         $display("=====================================");
@@ -160,7 +151,6 @@ module test_param_parser_full;
         foreach (real_arr[i]) $write("%g ", real_arr[i]);
         $display("");
 
-        // ========== 测试13：byte 类型 ==========
         $display("\n=====================================");
         $display("========== 测试13：byte参数 ==========");
         $display("=====================================");
@@ -169,7 +159,6 @@ module test_param_parser_full;
         `aip_int("", bit[7:0], bit8_val, 0)
         $display("bit8_val → %0d", bit8_val);
 
-        // ========== 测试14：enum 类型 ==========
         $display("\n=====================================");
         $display("========== 测试14：enum参数 ==========");
         $display("=====================================");
@@ -179,7 +168,6 @@ module test_param_parser_full;
             $display("test_mode → %s (%0d)", test_mode.name(), test_mode);
         end
 
-        // ========== 测试15：struct 类型 ==========
         $display("\n=====================================");
         $display("========== 测试15：struct参数 ==========");
         $display("=====================================");

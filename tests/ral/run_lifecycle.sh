@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# tests/ral：Task2命令生命周期验证入口，依赖53主机的VCS/UVM1.2。
-# 每种宽度独占build/lifecycle下的编译和日志目录；不生成RALF、不复用Task1产物。
-# 测试由真实UCLI驱动bridge watchdog，SV与Tcl完成标记必须同时成立。
+# 命令生命周期验证入口（VCS/UVM 1.2）：每种宽度独占 build/lifecycle 下的编译与日志目录。
+# 由真实 UCLI 驱动 bridge watchdog，SV 与 Tcl 完成标记必须同时成立。
 set -euo pipefail
 
 ral_script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -23,8 +22,7 @@ ral_build_dir="$ral_script_dir/build/lifecycle/$ral_mode"
 mkdir -p "$ral_build_dir"
 cd -- "$ral_build_dir"
 
-# 数组保存精确argv，日志和返回码总是记录；失败立即终止，不能读旧日志假通过。
-# 输入为artifact前缀和命令参数；只在本次已选定构建目录写证据，不改变调用环境。
+# 记录精确 argv、日志与返回码；失败立即终止，不能读旧日志假通过。
 ral_record_command() {
     local ral_label=$1
     local ral_rc=0

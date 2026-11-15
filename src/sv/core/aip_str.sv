@@ -1,4 +1,4 @@
-//AIP:Advanced Integrated Platform (for UVM)
+// 字符串与数值字面量工具：任意宽度整数解析、SV 风格格式化及 real 解析。
 `ifndef AIP_STR_SV
 `define AIP_STR_SV
 
@@ -12,23 +12,20 @@ typedef bit signed [AIP_VEC_MAX_BITS+1:0] aip_svec_t;
 
 class aip_str;
 
-    // 单个字符转小写（处理byte类型，返回string类型，兼容所有编译器）
+    // 自实现大小写转换（返回 string），避免 $tolower/$toupper 作用于 byte 时的类型问题。
     static function string char_to_lower(byte c);
-        // 仅对大写字母转换，其他字符（数字/符号）原样返回
         if (c >= "A" && c <= "Z") begin
-            return string'(c + 32); // 大写转小写：ASCII码+32
+            return string'(c + 32);
         end else begin
-            return string'(c); // 非大写字母，直接转为string
+            return string'(c);
         end
     endfunction
 
-    // 单个字符转大写（处理byte类型，返回string类型，兼容所有编译器）
     static function string char_to_upper(byte c);
-        // 仅对小写字母转换，其他字符原样返回
         if (c >= "a" && c <= "z") begin
-            return string'(c - 32); // 小写转大写：ASCII码-32
+            return string'(c - 32);
         end else begin
-            return string'(c); // 非小写字母，直接转为string
+            return string'(c);
         end
     endfunction
 
@@ -50,8 +47,6 @@ class aip_str;
         return res;
     endfunction
 
-    // ==================== 原有工具函数（替换$tolower/$toupper为自定义函数） ====================
-    // 1. strip：保持原有修复逻辑（已解决find问题）
     static function int str_find(string s, string sub, int start = 0);
         int s_len = s.len();
         int sub_len = sub.len();
@@ -107,7 +102,6 @@ class aip_str;
         return s.substr(start_idx, end_idx);
     endfunction
 
-    // 2. split：保持原有修复逻辑
     static function string_darray_t split(string s, string sep = "");
         string_darray_t result;
         int start = 0;
@@ -141,7 +135,6 @@ class aip_str;
         return result;
     endfunction
 
-    // 3. replace：保持原有修复逻辑
     static function string replace(string s, string old_str, string new_str, int count = -1);
         string res = "";
         int start = 0;
@@ -162,29 +155,22 @@ class aip_str;
         return res;
     endfunction
 
-    // 4. lower：替换$tolower为自定义char_to_lower
     static function string lower(string s);
         string res = "";
         foreach (s[i]) begin
-            // 原：res = {res, $tolower(s[i])};
-            // 新：用自定义函数处理单个字符，返回string类型，避免类型错误
             res = {res, char_to_lower(s[i])};
         end
         return res;
     endfunction
 
-    // 5. upper：替换$toupper为自定义char_to_upper
     static function string upper(string s);
         string res = "";
         foreach (s[i]) begin
-            // 原：res = {res, $toupper(s[i])};
-            // 新：用自定义函数处理单个字符，返回string类型，避免类型错误
             res = {res, char_to_upper(s[i])};
         end
         return res;
     endfunction
 
-    // 其他工具函数（find/index/print_string_array）保持不变
     static function int find(string s, string sub, int start = 0);
         return str_find(s, sub, start);
     endfunction
@@ -207,8 +193,6 @@ class aip_str;
     endfunction
 
 
-    // ==================== 新增：多进制字符串解析核心函数 ====================
-    // 辅助函数：移除数值中的下划线（兼容SV数值格式 12'b1010_1100）
     static function string remove_underscore(string s);
         string res = "";
         foreach (s[i]) begin
@@ -217,13 +201,12 @@ class aip_str;
         return res;
     endfunction
 
-    // 辅助函数：校验数值字符是否符合进制规则
     static function bit is_valid_digit(byte c, int radix);
         case (radix)
-            2:  return (c == "0" || c == "1"); // 二进制：0/1
-            8:  return (c >= "0" && c <= "7"); // 八进制：0-7
-            10: return (c >= "0" && c <= "9"); // 十进制：0-9
-            16: begin // 十六进制：0-9/a-f/A-F
+            2:  return (c == "0" || c == "1");
+            8:  return (c >= "0" && c <= "7");
+            10: return (c >= "0" && c <= "9");
+            16: begin
                 return (c >= "0" && c <= "9") || 
                        (c >= "a" && c <= "f") || 
                        (c >= "A" && c <= "F");
@@ -232,8 +215,8 @@ class aip_str;
         endcase
     endfunction
 
-    // 拆分数值字面量: 进制 / 数字串 / 显式位宽 / 负号. 返回 0 = 非法.
-    // 接受形式与旧 str_to_num 完全一致: 8'b1010、'h5A、100、b110、0x1A3F、0b1010、-10、-0x10、-8'd10
+    // 拆分数值字面量（进制/数字串/显式位宽/负号），非法返回 0。
+    // 接受：8'b1010、'h5A、100、b110、0x1A3F、0b1010、-10、-0x10、-8'd10。
     local static function bit split_num_literal(string s, output int radix,
                                                 output string num_part,
                                                 output int width_part,
@@ -335,9 +318,8 @@ class aip_str;
         return 1;
     endfunction
 
-    // 任意宽度 (<= AIP_VEC_MAX_BITS) 数值解析.
-    // 返回 1 成功; v = 绝对值; width = 显式位宽 (无则 0); is_negative = 前导 '-'.
-    // 失败 (非法字符 / 空 / 显式位宽溢出 / 超过 1024 bit) 返回 0.
+    // 任意宽度（<= AIP_VEC_MAX_BITS）数值解析：v = 绝对值，width = 显式位宽（无则 0），is_negative = 前导 '-'；
+    // 非法字符/空串/显式位宽溢出/超过 1024 bit 返回 0。
     static function bit str_to_vec(string s, output aip_vec_t v, output int width,
                                    output bit is_negative);
         int radix, width_part;
@@ -361,8 +343,7 @@ class aip_str;
         return 1;
     endfunction
 
-    // 64 位兼容封装 (旧接口). 输出：返回数值（非法返回全 1），通过 ref 返回位宽（非法返回 0）.
-    // width = 显式位宽, 无显式位宽时 = 数字个数 (历史语义, 调用方只用它判合法).
+    // 64 位兼容接口：非法返回全 1 且 width=0；无显式位宽时 width = 数字个数（调用方只用它判合法）。
     static function longint unsigned str_to_num(string s, ref int width);
         int radix, width_part, w;
         string num_part;
@@ -377,8 +358,6 @@ class aip_str;
         if (neg) str_to_num = -str_to_num;
     endfunction
 
-    // ==================== 新增：数值转字符串（SV风格） ====================
-    // 辅助函数：将整数按指定进制转换为无前导零的字符串（小写）
     local static function string to_radix_string(longint unsigned val, int radix);
         string digits = "0123456789abcdef";
         string res = "";
@@ -392,7 +371,7 @@ class aip_str;
         return res;
     endfunction
 
-    // 辅助函数：在字符串中每隔4位插入下划线（从低位开始分组，保持可读性）
+    // 从低位起每 4 位插入下划线。
     local static function string add_underscore(string s);
         string res = "";
         int len = s.len();
@@ -403,17 +382,12 @@ class aip_str;
         return res;
     endfunction
 
-    // 主函数：将数值转换为SV风格字符串
-    // 输入：value - 整数值（作为无符号处理）
-    //       width - 位宽（>0），若<=0则返回纯十进制字符串
-    //       radix - 进制（2,8,10,16），默认16
-    //       add_score - 是否每4位添加下划线，默认1（方便阅读）
+    // 转为 SV 风格字面量（如 8'h7b）；width<=0 时返回纯十进制，add_score 每 4 位加下划线（十进制除外）。
     static function string num_to_str(longint unsigned value, int width, int radix = 16, bit add_score = 1);
         string radix_letter;
         longint unsigned masked_val;
         string val_str;
 
-        // 确定进制字母
         case (radix)
             2:  radix_letter = "b";
             8:  radix_letter = "o";
@@ -426,32 +400,25 @@ class aip_str;
             end
         endcase
 
-        // 若width<=0，返回纯十进制字符串（无前缀）
         if (width <= 0) begin
             return $sformatf("%0d", value);
         end
 
-        // 截断数值至指定位宽（无符号处理）
         if (width >= 64) begin
             masked_val = value;
         end else begin
             masked_val = value & ((64'h1 << width) - 1);
         end
 
-        // 转换为指定进制字符串
         val_str = to_radix_string(masked_val, radix);
 
-        // 可选添加下划线分组
         if (add_score && radix != 10 && val_str.len() > 4) begin
             val_str = add_underscore(val_str);
         end
 
-        // 组合最终字符串
         return $sformatf("%0d'%s%s", width, radix_letter, val_str);
     endfunction
 
-    // ==================== 新增：帮助函数 ====================
-    // 打印所有公共函数的用法说明
     static function void help();
         $display("\n=== aip_str Class Help ===");
         $display("This class provides various string manipulation utilities for UVM testbenches.\n");
@@ -526,9 +493,7 @@ class aip_str;
         $display("==========================================\n");
     endfunction
 
-    // ==================== 新增：字符串转 real ====================
-    // 支持：纯整数(100)、纯小数(0.85)、科学计数法(1.5e6, 2.5E-3)、负数(-3.14)
-    // 非法输入返回 0.0
+    // 支持整数、小数、科学计数法与负数；非法输入返回 0.0。
     static function real str_to_real(string s);
         real val;
         string cleaned = remove_all_spaces(s);
@@ -547,68 +512,4 @@ class aip_str;
 
 endclass
 
-/*
-// ==================== 测试示例 ====================
-module test_string_utils;
-    initial begin
-        string s;
-        int val, width;
-        string_darray_t split_res;
-
-        // 原有测试...
-        $display("\n--- 原有功能测试 ---");
-        s = "###hello world###";
-        $display("strip(\"%s\", \"#\") = '%s'", s, aip_str::strip(s, "#"));
-        s = "  \thello\n\r  ";
-        $display("strip(\"%s\") = '%s'", s, aip_str::strip(s));
-        s = "a,b,c,def";
-        split_res = aip_str::split(s, ",");
-        $write("split(\"%s\", \",\") = ", s);
-        aip_str::print_string_array(split_res);
-        s = "hello old old old";
-        $display("replace(\"%s\", \"old\", \"new\", 2) = '%s'", s, aip_str::replace(s, "old", "new", 2));
-        s = "hello world";
-        $display("find(\"%s\", \"world\") = %0d", s, aip_str::find(s, "world"));
-        $display("find(\"%s\", \"test\") = %0d", s, aip_str::find(s, "test"));
-        s = "Hello World 123";
-        $display("lower(\"%s\") = '%s'", s, aip_str::lower(s));
-        $display("upper(\"%s\") = '%s'", s, aip_str::upper(s));
-
-        $display("\n=============== 增强的str_to_num测试（C风格前缀） ===============");
-        val = aip_str::str_to_num("48'hffff", width);
-        $display("0x1A3F → 数值=%0d, 位宽=%0d (预期:6719,4)", val, width);
-        val = aip_str::str_to_num("0b1010", width);
-        $display("0b1010 → 数值=%0d, 位宽=%0d (预期:10,4)", val, width);
-        val = aip_str::str_to_num("0o77", width);
-        $display("0o77 → 数值=%0d, 位宽=%0d (预期:63,2)", val, width);
-        val = aip_str::str_to_num("0d123", width);
-        $display("0d123 → 数值=%0d, 位宽=%0d (预期:123,3)", val, width);
-        val = aip_str::str_to_num("0x1A_3F", width); // 带下划线
-        $display("0x1A_3F → 数值=%0d, 位宽=%0d (预期:6719,4)", val, width);
-        val = aip_str::str_to_num("0b10_10", width);
-        $display("0b10_10 → 数值=%0d, 位宽=%0d (预期:10,4)", val, width);
-        val = aip_str::str_to_num("0x", width); // 非法
-        $display("0x → 数值=%0d, 位宽=%0d (预期:-1,0)", val, width);
-
-        $display("\n=============== 新增的num_to_str测试 ===============");
-        $display("num_to_str(123, 8, 10) = '%s' (预期:8'd123)", aip_str::num_to_str(123, 8, 10));
-        $display("num_to_str(123, 8, 16) = '%s' (预期:8'h7b)", aip_str::num_to_str(123, 8, 16));
-        $display("num_to_str(123, 8, 2)  = '%s' (预期:8'b0111_1011)", aip_str::num_to_str(123, 8, 2));
-        $display("num_to_str(123, 8, 8)  = '%s' (预期:8'o173)", aip_str::num_to_str(123, 8, 8));
-        $display("num_to_str(0, 4, 16)   = '%s' (预期:4'h0)", aip_str::num_to_str(0, 4, 16));
-        $display("num_to_str(255, 8, 16) = '%s' (预期:8'hff)", aip_str::num_to_str(255, 8, 16));
-        $display("num_to_str(255, 8, 16, 0) = '%s' (预期:8'hff, 无下划线)", aip_str::num_to_str(255, 8, 16, 0));
-        $display("num_to_str(1023, 10, 2) = '%s' (预期:10'b1111111111, 有下划线?)", aip_str::num_to_str(1023, 10, 2)); // 实际10位，超过4位会加下划线，此处应有下划线
-        $display("num_to_str(1023, 10, 2, 0) = '%s' (预期:10'b1111111111, 无下划线)", aip_str::num_to_str(1023, 10, 2, 0));
-        $display("num_to_str(-1, 8, 16) = '%s' (预期:8'hff，因为截断)", aip_str::num_to_str(-1, 8, 16));
-        $display("num_to_str(500, 9, 16) = '%s' (预期:9'h1f4)", aip_str::num_to_str(500, 9, 16));
-
-        // 调用帮助函数
-        aip_str::help();
-
-        $finish;
-    end
-endmodule
-
-*/
 `endif // AIP_STR_SV

@@ -1,11 +1,11 @@
-// tests/sv：Task2真实命令调度/bridge生命周期验证；只用假action，不连接RAL transport。
-// 测试拥有观察句柄与计数；产品service仍为永久单例，dirty场景必须使用独立仿真进程。
+// 真实命令调度/bridge 生命周期测试：只用假 action，不连接 RAL transport。
+// 产品 service 是永久单例，dirty 场景必须用独立仿真进程。
 `include "aip_core_pkg.sv"
 package ral_lifecycle_test_pkg;
     import uvm_pkg::*;
     import aip_core_pkg::*;
 
-    // 集中断言确保任一失败都会阻止最后COMPLETE；不把日志里的孤立OK算通过。
+    // 集中断言：任一失败都阻止最后的 COMPLETE，不把日志里的孤立 OK 算通过。
     class life_check;
         static int checks;
         static string scenario;
@@ -16,7 +16,6 @@ package ral_lifecycle_test_pkg;
         static int actions, gate_parses, background_steps, hook_calls;
         static bit holding;
 
-        // 明确契约断言，在行为red中要求命中精确label而不是编译错误。
         static function void demand(bit condition, string label0);
             if (!condition) `uvm_fatal("RAL_LIFECYCLE_ASSERT", label0)
             checks++;
@@ -57,7 +56,6 @@ package ral_lifecycle_test_pkg;
 
     // 无总线的后台sequence；真实UVM进程登记供watchdog隔离测试，但不tick喂狗。
     class life_sequence extends uvm_sequence;
-        // 只建立UVM sequence对象，不创建driver或RAL模型。
         function new(string name = "life_sequence"); super.new(name); endfunction
 
         // 持续推进独立后台状态，watchdog不应因别的命令超时而杀掉它。
@@ -74,7 +72,6 @@ package ral_lifecycle_test_pkg;
 
     // 测试命令统一入口；不同注册对象避免框架同名BUSY掩盖service竞争。
     class life_command extends aip_cmd_user_task;
-        // 名称决定测试角色，所有动作都是测试侧假action而非产品命令。
         function new(string name); super.new(name); endfunction
 
         // 经真实core进入，覆盖worker身份、快照复制、旧token、取消和watchdog。
@@ -268,7 +265,6 @@ package ral_lifecycle_test_pkg;
         `uvm_component_utils(ral_lifecycle_test)
         life_command commands[$];
 
-        // 测试组件由UVM拥有；命令对象由本测试保留到仿真结束。
         function new(string name, uvm_component parent); super.new(name, parent); endfunction
 
         // 静态名称在bridge启动前全部注册；不注册产品ral_op或ral_test。

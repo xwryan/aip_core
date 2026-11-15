@@ -1,6 +1,4 @@
-# tests/tcl：后台观察的纯Tcl解析、资源所有权与错误门禁，不替代53真实回调测试。
-# 本测试拥有所有get/stop/senv/pause桩、观察表和断言，不创建仿真或外部文件。
-# 使用真实控制/观察实现，只有native UCLI原语由可检查桩替换。
+# 后台观察的纯 Tcl 解析、资源所有权与错误门禁单测：使用真实控制/观察实现，只把 native UCLI 原语换成可检查桩。
 set root [file normalize [file join [file dirname [info script]] .. ..]]
 source [file join $root src tcl aip_sim_control.tcl]
 source [file join $root src tcl aip_watch.tcl]
@@ -14,7 +12,6 @@ set fail_install 0
 set fail_callback 0
 set get_count 0
 
-# 任一断言失败立即非零退出，最后唯一PASS才可作为门禁。
 proc check {label condition} {
     if {!$condition} { error "WATCH_UNIT_FAIL $label" }
     incr ::checks

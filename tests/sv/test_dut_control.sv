@@ -1,17 +1,14 @@
-// tests/sv：DUT命令的真实HDL访问和逐调用结果隔离测试。
-// 依赖AIP/UVM HDL DPI；顶层拥有被测信号，调度器拥有每次调用上下文。
-// force_time后台期间允许另一个字符串命令读取信号；不并行写同一DUT对象。
+// DUT 命令的真实 HDL 访问与逐调用结果隔离测试；force_time 后台期间允许另一字符串命令读信号（不并行写同一 DUT 对象）。
 `include "aip_core_pkg.sv"
 
 import uvm_pkg::*;
 import aip_core_pkg::*;
 
-// 单信号测试保持原同步覆盖，追加不同旧宏命令之间的后台并行读验证。
 module test_dut_control;
     logic dut_signal;
     logic [15:0] dut_mem [0:15];
 
-    // 同步兼容入口仍通过exec读取最近结果；后台用例单独使用逐次输出。
+    // 同步兼容入口经 exec 读最近结果；后台用例另用逐次输出。
     task automatic exec_ok(string cmd);
         aip_cmd::exec(cmd, SRC_SOCKET);
         if (aip_cmd::__aip_cmd_last_status != 0)
@@ -19,7 +16,6 @@ module test_dut_control;
                    aip_cmd::__aip_cmd_last_result);
     endtask
 
-    // 非法参数必须返回失败，不能把HDL写操作执行成功。
     task automatic exec_error(string cmd);
         aip_cmd::exec(cmd, SRC_SOCKET);
         if (aip_cmd::__aip_cmd_last_status == 0)
@@ -135,8 +131,7 @@ module test_dut_control;
         if (dut_signal !== 1'b1)
             $fatal(1, "force-time did not release after timeout");
 
-        // 两个命令都保留原str_status宏，但内置实现使用局部结果上下文，
-        // 因此dut_get不能因为另一个字符串task尚未返回而被全局legacy锁挡住。
+        // 两命令都用 str_status 宏，但内置实现用局部结果上下文，dut_get 不应被全局 legacy 锁挡住。
         begin
             int returned_status;
             string returned_result;

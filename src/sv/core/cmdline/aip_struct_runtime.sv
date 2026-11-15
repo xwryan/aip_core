@@ -1,90 +1,59 @@
-//===========================================================
-// 所属层次：src/sv/core/cmdline（内部 include 片段，不是独立 compilation unit）。
-// schema 共享运行时：字段元数据、配置查询、长度/索引校验、生成器及类型化来源。
-// 依赖公共上下文及基础解析类；供 schema 宏和类型化容器适配器调用。
-// 元数据按类型贯穿仿真；容器状态继续由既有 begin/end/reset 路径管理，本次不新增缓存。
-// 只允许 aip_cmdline.sv 在其 include 窗口加载；拒绝直接包含，避免创建第二份 $unit/package 类型。
-// 聚合入口持有唯一的 AIP_CMDLINE_SV 防重入 guard，本文件不声明新的 package。
-// 所有 CLI 查询均经过共享参数源；恢复后重取当前进程参数，保持既有解析/优先级规则。
-//===========================================================
+// schema 共享运行时：字段元数据、配置查询、长度/索引校验、生成器及类型化来源，供 schema 宏和容器适配器调用。
+// 内部 include 片段，只能由 aip_cmdline.sv 加载（直接包含会产生第二份 $unit/package 类型）。
+// 所有 CLI 查询须经共享参数源 aip_cmdline_source，恢复后才会重取当前进程参数。
 `ifndef AIP_CMDLINE_INTERNAL_INCLUDE
 `AIP_CMDLINE_INTERNAL_INCLUDE_ERROR__USE_AIP_CMDLINE_SV
 `else
-//-------------------------------------------------------------------------
-// Typed struct schema companion API.
-//-------------------------------------------------------------------------
 class aip_struct_runtime;
     static int perm_values[string][$];
     static aip_svec_t perm_wide_values[string][$];
     static int allocation_scope_depth;
     static int allocation_used;
     static int ALLOCATION_LIMIT = 1000000;
-    // Per-container field snapshots used by the schema array postprocessor.
-    // Keys are <container-root>|<index>|<relative-field-path>.
+    // Per-container field snapshots, keyed <container-root>|<index>|<relative-field-path>.
     static string field_values[string];
     static int field_kinds[string]; // 1 integral, 2 string, 3 real, 4 enum
     static string field_names[string][$];
 
-    // Lossless typed keys for schema-container postprocessing.  The legacy
-    // string snapshots above remain available to older helpers, but are not
-    // used for struct unique/sort decisions: formatting an integral/real or
-    // an enum name would lose width, signedness, precision, or the underlying
-    // enum value.  Packed values are kept in a fixed 1024-bit envelope (the
-    // schema width guard has the same 1..1024 limit).
+    // Lossless typed descriptors for unique/sort: the string snapshots above would lose width, sign, precision
+    // or the enum value. 1024 bits matches the schema width guard (1..1024).
     static logic [1023:0] field_bits[string];
     static int field_width[string];
     static bit field_signed[string];
     static real field_real_values[string];
     static string field_string_values[string];
     static int field_typed_kinds[string];
-    // Provenance for struct unique refill.  A descriptor marked `from_each`
-    // came from the canonical ROOT.each.<suffix> rule and may be redrawn;
-    // all other sources (overall/indexed/compact/default) are fixed.
+    // from_each: value came from ROOT.each.<suffix> and may be redrawn for unique; all other sources are fixed.
     static bit field_from_each[string];
     static string field_each_raw[string];
-    // A struct-array apply is materialized in two passes.  The fixed pass
-    // records every explicit/overall/compact/default value first; the each
-    // pass then draws only canonical `.each` fields against that complete
-    // fixed set.  Keeping the phase here also lets nested schema arrays share
-    // the same ordering without introducing another generated helper file.
+    // Struct arrays materialize in two passes: PHASE_FIXED records all explicit/overall/compact/default values,
+    // then PHASE_EACH draws only .each fields against that complete fixed set (nested arrays share the phase).
     static int materialization_phase;
     static int PHASE_NORMAL = 0;
     static int PHASE_FIXED = 1;
     static int PHASE_EACH = 2;
     static int redraw_attempts[string];
 
-    // Typed information for scalar leaves is registered during the metadata
-    // pass.  It is needed by finite `.each` candidate preflight even when all
-    // records are each-filled (so no concrete descriptor exists yet).
+    // Registered in the metadata pass: finite .each preflight needs it even before any concrete descriptor exists.
     static int schema_scalar_typed_kinds[string];
     static int schema_scalar_width[string];
     static bit schema_scalar_signed[string];
-    // Enum metadata is retained by leaf schema key so finite `.each`
-    // preflight can cast names to the underlying packed value without using
-    // the legacy 32-bit enum helper arrays.
+    // Lets preflight map enum names to packed values without the legacy 32-bit enum helper arrays.
     static string schema_enum_names[string][$];
     static logic [1023:0] schema_enum_bits[string][$];
 
-    // Schema identity for each materialized container.  This lets the
-    // postprocessor validate controls from registered scalar paths even when
-    // an explicitly zero-sized container has no runtime descriptors.
+    // Lets the postprocessor validate controls even for a zero-sized container with no descriptors.
     static string container_schema[string];
     static int container_sizes[string];
 
-    // Schema shape metadata is registered independently of any concrete
-    // apply target.  Container sizing happens before the first record is
-    // materialized (and therefore before field_values/field_names are
-    // populated), so the generated companions register their field tree in a
-    // metadata-only pass before asking for a size.  Keys are
-    // <schema-type>|<relative-field-name>.
+    // Schema shape, keyed <schema-type>|<field>; registered in a metadata-only pass because sizing happens
+    // before any record (and thus field_values/field_names) exists.
     static int schema_field_kinds[string]; // 1 scalar, 2 primitive array, 3 struct, 4 struct array
     static string schema_field_children[string];
     static string schema_field_names[string][$];
     static bit schema_registered[string];
     static bit schema_registering[string];
-    // During registration, lookups/resolvers must not consume user rules or
-    // allocate dynamic members.  Static arrays still receive a temporary
-    // fixed-size default buffer in their typed resolver.
+    // Registration pass: lookups must not consume user rules or allocate dynamic members (static arrays still get a default buffer).
     static bit metadata_mode = 0;
 
     static function void begin_allocation_scope();
@@ -193,8 +162,6 @@ class aip_struct_runtime;
         end
     endfunction
 
-    // Resolve a nested scalar suffix (e.g. `meta.score`) through the
-    // registered schema tree and return its lossless comparison metadata.
     static function bit schema_typed_field(string schema_id, string suffix,
                                            output int kind, output int width,
                                            output bit is_signed);
@@ -227,8 +194,7 @@ class aip_struct_runtime;
         return 0;
     endfunction
 
-    // Resolve an enum name through the schema tree and return its underlying
-    // packed bits.  Names are case-insensitive, matching aip_cmdline_enum.
+    // Names are case-insensitive, matching aip_cmdline_enum.
     static function bit schema_enum_literal(string schema_id, string suffix,
                                              string token,
                                              output logic [1023:0] bits);
@@ -263,9 +229,6 @@ class aip_struct_runtime;
         return 0;
     endfunction
 
-    // Whether a scalar adapter should execute its assignment in the current
-    // materialization pass.  In PHASE_FIXED only fixed sources run; in
-    // PHASE_EACH only `.each` sources run.  NORMAL preserves legacy behavior.
     static function bit field_should_apply(bit from_each);
         if (materialization_phase == PHASE_FIXED) return !from_each;
         if (materialization_phase == PHASE_EACH) return from_each;
@@ -294,11 +257,7 @@ class aip_struct_runtime;
         return 1;
     endfunction
 
-    // Enumerate only scalar leaves in a registered schema.  Primitive and
-    // struct-array members are intentionally not descended: their controls
-    // belong to the nested array resolver rather than this whole-record
-    // postprocessor.  `prefix` is the canonical dotted suffix beneath the
-    // current container (for example `meta.`).
+    // Scalar leaves only: array members' controls belong to the nested array resolver (prefix e.g. meta.).
     static function void collect_schema_scalar_suffixes(
             string schema_id, string prefix, ref string out[$]);
         int kind;
@@ -318,7 +277,7 @@ class aip_struct_runtime;
         end
     endfunction
 
-    // schema/queue 失败通过公共 hard fatal 终止，保持原错误前缀并补充用户位置和配置。
+    // 公共 hard fatal，附带用户位置和配置原文；[AIP_STRUCT] 前缀保持不变。
     static function void fail(string msg);
         aip_cmdline_diagnostic::report("[AIP_STRUCT]", msg, `__FILE__, `__LINE__);
     endfunction
@@ -383,10 +342,8 @@ class aip_struct_runtime;
         return r;
     endfunction
 
-    // Primitive queues preserve the legacy four-level source order.  Calling
-    // lookup(full) and then lookup(leaf) would incorrectly put a plusarg full
-    // key ahead of a runtime leaf key, so keep the plusarg-only lookup
-    // separate and select all runtime sources first.
+    // lookup(full) then lookup(leaf) would rank a plusarg full key above a runtime leaf key, breaking the legacy
+    // four-level queue order; lookup_queue_rule therefore checks all runtime sources first.
     static function lookup_t lookup_plusarg_only(string key);
         lookup_t r;
         string vals[$];
@@ -431,9 +388,7 @@ class aip_struct_runtime;
         return r;
     endfunction
 
-    // Recognize an exact primitive-queue element key rooted at either the
-    // public PATH.NAME key or its legacy leaf fallback.  The caller strips a
-    // leading '+' and value before entering this helper.
+    // key (already stripped of '+' and value) may use the PATH.NAME root or the legacy leaf fallback.
     static function bit queue_index_from_key(string full_root,
                                              string leaf_root,
                                              string key,
@@ -462,7 +417,7 @@ class aip_struct_runtime;
         return 1;
     endfunction
 
-    // 扫描队列索引并推断长度；每个键临时绑定自身原文，错误定位后不污染后续字段。
+    // 每个键单独压/弹诊断帧：出错时定位到该键，且不残留给后续字段。
     static function int queue_index_extent(string full_root,
                                            string leaf_root);
         string keys[$], args[$];
@@ -565,10 +520,7 @@ class aip_struct_runtime;
         return text.substr(text.len()-suffix.len(), text.len()-1) == suffix;
     endfunction
 
-    // Struct summaries count normalized rules below their full ROOT without
-    // feeding record descendants to the primitive exact-index parser.  Runtime
-    // entries shadow the same plusarg key and repeated plusargs retain only the
-    // final value, matching normal lookup semantics.
+    // Classified through schema metadata, so record descendants never reach the primitive exact-index parser.
     static function bit struct_summary_rule_known(string schema_id,
                                                   string suffix,
                                                   bit has_index);
@@ -587,6 +539,7 @@ class aip_struct_runtime;
         return kind != META_UNKNOWN && kind != META_BARE_ARRAY;
     endfunction
 
+    // Runtime entries shadow the same plusarg key and repeated plusargs keep the last value, as in lookup().
     static function void struct_queue_rule_stats(string root,
                                                  string schema_id,
                                                  output int rules,
@@ -673,17 +626,8 @@ class aip_struct_runtime;
         return schema_field_names[schema_id].size();
     endfunction
 
-    // Enumerate a concrete generated path in recursive specificity order.
-    // Every unpacked-container selector contributes an exact/each branch and
-    // outer selectors are compared before inner selectors.  For example:
-    //
-    //   cfgs[2].channels[1]
-    //   cfgs[2].channels.each
-    //   cfgs.each.channels[1]
-    //   cfgs.each.channels.each
-    //
-    // Keeping this order in one helper prevents value, size, unique, sort and
-    // primitive-child consumers from growing subtly different fallback rules.
+    // Specificity order, outer selectors first: cfgs[2].channels[1], cfgs[2].channels.each,
+    // cfgs.each.channels[1], cfgs.each.channels.each. Single source of fallback order for every consumer.
     static function void recursive_selector_paths(string concrete,
                                                   ref string paths[$]);
         string literals[$];
@@ -747,10 +691,7 @@ class aip_struct_runtime;
         return r;
     endfunction
 
-    // Canonical field lookup for container elements.  Within every inherited
-    // parent branch, an explicit index wins over the field overall slot, which
-    // wins over that container's each rule.  Only after exhausting those
-    // inner choices does lookup relax the next outer selector.
+    // Per parent branch: explicit index > field overall slot > each rule; only then relax the next outer selector.
     static function lookup_t lookup_field(string root, string field);
         lookup_t r;
         string inner_base, inner_suffix, inner_key, inner_desc_key;
@@ -796,9 +737,7 @@ class aip_struct_runtime;
         return r;
     endfunction
 
-    // Select one position from a field-level overall list/generator.  Unlike
-    // scalar resolver calls, this function never randomizes a candidate list;
-    // every slot is consumed at its corresponding container index.
+    // Unlike scalar resolvers, never picks randomly from a list: slot idx takes item idx; a perm: is shuffled once and cached.
     static function string overall_slot(string raw, int idx, input string cache_key,
                                         output bit found);
         string s, p[$];
@@ -957,11 +896,8 @@ class aip_struct_runtime;
         return member_found;
     endfunction
 
-    // An indexed compact member is part of the indexed branch, so it beats
-    // field-overall and `.each` rules but remains below an exact dotted
-    // indexed field rule.  A compact member on a single struct remains below
-    // its direct child key.
-    // 紧凑字段扫描期间绑定 ROOT 原文；扫描返回后恢复调用者，再由消费宏选择实际字段值。
+    // An indexed compact member beats field-overall and .each rules but not an exact ROOT[i].field rule;
+    // on a single struct it stays below the direct child key.
     static function lookup_t lookup_field_with_compact(string root, string field,
                                                         string compact);
         lookup_t r;
@@ -997,10 +933,8 @@ class aip_struct_runtime;
         return r;
     endfunction
 
-    // Resolve a rule owned by one concrete container.  Nested containers
-    // inherit through the same canonical outer-array fallback as their size
-    // and postprocess controls, while cache_key deliberately names the
-    // concrete owner rather than the shared canonical plusarg.
+    // Inherits via the outer-array fallback like size/postprocess controls, but cache_key names the concrete
+    // owner, not the shared canonical plusarg.
     static function lookup_t lookup_container_rule(string root, string suffix,
                                                     output string cache_key);
         lookup_t r;
@@ -1010,11 +944,8 @@ class aip_struct_runtime;
         return r;
     endfunction
 
-    // Split a canonical schema suffix into field, selector, and control
-    // tokens.  Unlike split_top(), this scanner treats dots as separators and
-    // keeps each bracketed index as its own token.  It is intentionally
-    // permissive about unknown identifier text; the metadata lookup below is
-    // what decides whether a path belongs to this schema.
+    // Dots separate tokens and each [index] is its own token. Deliberately permissive about identifiers:
+    // the metadata lookup decides whether a path belongs to the schema.
     static function void split_schema_path(string path, ref string toks[$],
                                             output bit ok);
         string cur;
@@ -1042,11 +973,7 @@ class aip_struct_runtime;
                 if (j >= path.len() || j == i + 1) begin ok = 0; return; end
                 toks.push_back(path.substr(i, j));
                 i = j + 1;
-                // A selector may be followed by either another selector or
-                // one dot and the next field name.  Consume that separator
-                // here; otherwise the normal dot branch sees an empty
-                // current token and incorrectly rejects paths such as
-                // `nested[0].base` and `each[0].base`.
+                // Eat the dot after a selector, else the dot branch rejects nested[0].base as an empty token.
                 if (i < path.len() && path[i] == ".") begin
                     i++;
                     if (i >= path.len() || path[i] == "." ||
@@ -1074,9 +1001,7 @@ class aip_struct_runtime;
         return (tok.len() >= 2 && tok[0] == "[" && tok[tok.len()-1] == "]");
     endfunction
 
-    // Parse only canonical non-negative decimal indexes.  This helper never
-    // invokes the value parser, so an unrelated malformed key cannot trigger
-    // a global AIP fatal merely by being present on the command line.
+    // Canonical decimal only, without the value parser, so a malformed unrelated key cannot cause a fatal.
     static function bit schema_index_token(string tok, output int idx);
         int v, d;
         idx = -1;
@@ -1094,12 +1019,8 @@ class aip_struct_runtime;
         return 1;
     endfunction
 
-    // Parse an indexed primitive-schema-array key after the caller has
-    // removed a leading '+' and (for plusargs) the '=value' suffix.  Every
-    // selector branch is considered so inherited outer `.each` paths receive
-    // the same strict index checks as a concrete root.  A prefix that starts an
-    // array key but does not end in one canonical [decimal] selector is a
-    // malformed key, rather than an unrelated argument to ignore.
+    // key has '+' and '=value' already stripped. All selector branches are checked so inherited .each paths get
+    // the same strict index check; a matching prefix without one canonical [decimal] is malformed, not ignored.
     static function bit schema_array_index_from_key(string root, string field,
                                                      string key,
                                                      string source_text,
@@ -1122,10 +1043,7 @@ class aip_struct_runtime;
         return 0;
     endfunction
 
-    // Return one past the greatest indexed primitive schema-array slot while
-    // validating every matching runtime/plusarg key.  This is intentionally a
-    // separate scanner from legacy container_index_extent(): new schema arrays
-    // must not feed partially parsed text to the legacy integer parser.
+    // Separate from container_index_extent() so schema arrays never feed partially parsed text to the legacy int parser.
     static function int schema_array_index_extent(string root, string field);
         string keys[$], args[$];
         string key, arg;
@@ -1164,11 +1082,8 @@ class aip_struct_runtime;
         return 0;
     endfunction
 
-    // Resolve a relative path against generated field-kind metadata.  Return
-    // values use schema_match_kind_t.  META_BARE_ARRAY means the path is
-    // known, but it crossed an array-valued field without selecting that
-    // container first; callers use that distinction for the required
-    // [AIP_STRUCT] diagnostic while continuing to ignore unrelated keys.
+    // Returns a schema_match_kind_t. META_BARE_ARRAY = known path crossing an array field without a selector:
+    // callers report it, while unrelated keys (META_UNKNOWN) are ignored.
     static function int schema_match_path(input string schema_id, ref string toks[$],
                                           input int pos, input bit allow_array_direct);
         int kind, sub;
@@ -1189,8 +1104,7 @@ class aip_struct_runtime;
 
         if (kind == META_PRIMITIVE_ARRAY) begin
             if (!allow_array_direct) begin
-                // Any recognized operation on this array is known but lacks
-                // the selector of the containing struct record.
+                // Known operation on this array, but the enclosing record has no selector.
                 if (pos + 1 >= toks.size()) return META_BARE_ARRAY;
                 if (schema_control(toks[pos+1]) || schema_looks_index(toks[pos+1]))
                     return META_BARE_ARRAY;
@@ -1213,12 +1127,8 @@ class aip_struct_runtime;
 
         if (kind == META_STRUCT_ARRAY) begin
             if (!allow_array_direct) begin
-                // The current record has not selected this (nested) array's
-                // enclosing record yet.  A selector immediately after the
-                // field therefore selects the nested array, not the outer
-                // container.  Probe the child tree only to distinguish a
-                // known path from an unrelated dotted key, but preserve the
-                // bare-array result for every recognized descendant.
+                // Enclosing record not selected yet: a selector right after the field picks the nested array, not
+                // the outer one. Probe the child tree only to tell known paths (still bare) from unrelated keys.
                 if (pos + 1 >= toks.size()) return META_BARE_ARRAY;
                 if (pos + 2 == toks.size() && schema_control(toks[pos+1]))
                     return META_BARE_ARRAY;
@@ -1241,9 +1151,7 @@ class aip_struct_runtime;
                 if (pos + 2 >= toks.size()) return META_STRUCT;
                 return schema_match_path(child_id, toks, pos + 2, 1);
             end
-            // A known child below this array, but no each/[index] selector.
-            // Probe the child tree only to distinguish it from an unrelated
-            // dotted key; the caller still rejects the bare form.
+            // Child without an each/[index] selector: probe only to tell it from an unrelated key; still bare.
             sub = schema_match_path(child_id, toks, pos + 1, 0);
             if (sub != META_UNKNOWN) return META_BARE_ARRAY;
             return META_UNKNOWN;
@@ -1261,8 +1169,8 @@ class aip_struct_runtime;
         return schema_match_path(schema_id, toks, 0, allow_array_direct);
     endfunction
 
-    // 仅注册 schema 接受的 .each 后代才参与大小推导；无关参数继续忽略。
-    // 返回真或拒绝嵌套数组缺 selector 时选择实际 key/raw，供 size unknown 等错误定位。
+    // 只有 schema 认得的 .each 后代才算数，无关参数忽略。
+    // 返回真时诊断已选中该 key/raw，调用方据此定位 size unknown 等错误。
     static function bit has_container_each_schema(string root, string schema_id);
         string keys[$];
         string args[$];
@@ -1349,7 +1257,7 @@ class aip_struct_runtime;
             fail($sformatf("field '%s' has unsupported width %0d (1..1024)", field, width));
     endfunction
 
-    // 校验 real 默认值及求值结果；按位识别 NaN/Inf，保留旧错误文本供脚本检索。
+    // 默认值和求值结果共用此检查；错误文本沿用旧版，供脚本检索。
     static function void check_real(real value, string field);
         bit [63:0] encoding;
         encoding = $realtobits(value);
@@ -1374,9 +1282,7 @@ class aip_struct_runtime;
             fail($sformatf("enum default for field '%s' is not a declared item", field));
     endfunction
 
-    // Infer a dynamic container extent from indexed runtime/plusarg keys.
-    // The explicit .size rule, when present, remains authoritative and is
-    // checked by the caller against this extent.
+    // An explicit .size rule, when present, stays authoritative over this inferred extent.
     static function int container_index_extent(string root);
         int max_idx = -1;
         string keys[$]; string args[$];
@@ -1403,11 +1309,8 @@ class aip_struct_runtime;
         return max_idx + 1;
     endfunction
 
-    // Return the number of slots represented by an overall container value.
-    // A generator is a complete baseline, while an ordinary comma-separated
-    // value is one slot per top-level item.  This deliberately does not draw
-    // any random value; length normalization must happen before materializing
-    // records.
+    // A generator gives the complete length; a plain list gives one slot per top-level item. Never draws RNG:
+    // lengths are normalized before any record is materialized.
     static function int overall_length(string raw, output bit is_generator);
         string s, p[$];
         aip_svec_t a, b, step, count;
@@ -1443,8 +1346,7 @@ class aip_struct_runtime;
                 fail($sformatf("perm generator expands outside 1..1000000 elements: '%s'", raw));
             return int'(count);
         end
-        // A bracket pair is an overall wrapper unless its body is a single
-        // scalar range.  Keep the same distinction as the typed resolver.
+        // [..] is a list wrapper unless it holds a single range (same rule as the typed resolver).
         if (s.len() >= 2 && s[0] == "[" && s[s.len()-1] == "]" &&
             aip_str::str_find(s, ":") == -1)
             s = s.substr(1, s.len()-2);
@@ -1469,10 +1371,7 @@ class aip_struct_runtime;
         return 1;
     endfunction
 
-    // Extract the first container selector and the suffix that follows it.
-    // `has_index` is true only for ROOT[index]...; a dotted descendant keeps
-    // it false.  The helper performs a strict ROOT boundary check, preventing
-    // cfgs from accidentally owning cfgs_extra.* keys.
+    // has_index only for ROOT[index]...; the strict ROOT boundary keeps cfgs from owning cfgs_extra.* keys.
     static function bit schema_descendant_suffix(string root, string key,
                                                  output string suffix,
                                                  output bit has_index,
@@ -1503,8 +1402,7 @@ class aip_struct_runtime;
         return 1;
     endfunction
 
-    // 兼容原有只收集 value 的 API；内部同时保存 key 供大小推导报错定位。
-    // 输出追加而不清空，运行时 override 继续覆盖相同 key 的 plusarg。
+    // 兼容旧版只收集 value 的接口；结果追加到 values，不清空。
     static function void collect_container_overalls_schema(string root,
                                                             string schema_id,
                                                             ref string values[$]);
@@ -1512,8 +1410,7 @@ class aip_struct_runtime;
         collect_container_overalls_schema_with_sources(root, schema_id, values, source_keys);
     endfunction
 
-    // 收集已注册标量 overall 并同步追加来源 key；缺少数组 selector 时立即 fatal，
-    // 无关 schema 路径继续忽略，不改变优先级和收集次序。
+    // 只收集已注册标量字段的 overall 及来源 key；数组子项缺 selector 即 fatal，无关路径忽略。
     static function void collect_container_overalls_schema_with_sources(string root,
                                                             string schema_id,
                                                             ref string values[$],
@@ -1556,10 +1453,8 @@ class aip_struct_runtime;
             value = (eq >= 0) ? arg.substr(eq+1, arg.len()-1) : "";
             normalized[key] = value;
         end
-        // Concrete nested containers inherit scalar field baselines from
-        // canonical outer-each keys.  Resolve every registered scalar suffix
-        // through the same fallback used during materialization so an
-        // inherited seq/perm can be the sole dynamic-length source.
+        // Nested containers inherit field baselines from outer-each keys; resolve them with the materialization
+        // fallback so an inherited seq/perm can be the only dynamic-length source.
         begin
             string scalar_suffixes[$];
             collect_schema_scalar_suffixes(schema_id, "", scalar_suffixes);
@@ -1577,8 +1472,8 @@ class aip_struct_runtime;
         end
     endfunction
 
-    // 从注册的 indexed 后代推导容量，未知后代不影响大小；缺 selector 时记录该项再 fatal。
-    // 非规范索引仍由后续 bounds 校验处理，返回前保留最大索引项以定位容量冲突。
+    // 只按已注册的 indexed 后代推导长度，非规范索引留给后续 bounds 校验；
+    // 返回前选中最大索引项，供容量冲突定位。
     static function int container_index_extent_schema(string root,
                                                        string schema_id);
         string keys[$];
@@ -1631,13 +1526,13 @@ class aip_struct_runtime;
         return max_idx + 1;
     endfunction
 
-    // 兼容旧版仅收集 value 的接口，仍按标准 key 合并 override 和最后一个 plusarg。
+    // 兼容旧版只收集 value 的接口。
     static function void collect_container_overalls(string root, ref string values[$]);
         string source_keys[$];
         collect_container_overalls_with_sources(root, values, source_keys);
     endfunction
 
-    // 同步追加 overall value 与来源 key，不消费随机数；供长度错误显示实际字段配置。
+    // override 优先于同 key 的 plusarg，重复 plusarg 取最后一个；不消费 RNG。
     static function void collect_container_overalls_with_sources(string root,
                                                                  ref string values[$],
                                                                  ref string source_keys[$]);
@@ -1703,10 +1598,8 @@ class aip_struct_runtime;
         check_size_candidate(path, hi, max_size);
     endfunction
 
-    // 校验 .size 的完整有限表达式并抽样一次，返回满足 max_size 的 int 长度。
-    // 校验阶段不消费 RNG；零权重项仍验证候选范围，负权重/全零组立即报错，
-    // 防止禁用候选掩盖越界配置，或全零表达式进入后续抽样的模零路径。
-    // 临时诊断帧仅覆盖本次 .size 解析，正常返回恢复上层字段，避免误标后续错误。
+    // 先校验全部候选再抽样一次，校验不消费 RNG。零权重项同样校验范围，以免禁用项掩盖越界配置；
+    // 负权重或全零权重组直接报错，避免进入抽样的模零路径。
     static function int normalize_size(string raw, string path,
                                        int max_size = -1);
         string s, body, parts[$], item, left, right, seqparts[$];
@@ -1787,8 +1680,7 @@ class aip_struct_runtime;
             end
         end
         n = aip_cmdline#(int)::parse_value(s);
-        // The full-domain check above makes this cast lossless; retain a
-        // postcondition in case the legacy sampler grammar ever changes.
+        // Redundant after the checks above; kept as a postcondition in case the sampler grammar changes.
         if (n < 0 || n > 1000000 || (max_size >= 0 && n > max_size))
             fail($sformatf("%s invalid sampled size %0d", path, n));
         aip_cmdline_diagnostic::pop();
@@ -1799,8 +1691,7 @@ class aip_struct_runtime;
         return container_size_schema(root, defsz, "");
     endfunction
 
-    // 汇总 root/字段 overall、生成器、索引和 .size 来确定 schema 容器大小。
-    // 每条候选保留 key/raw，长度冲突和容量错误选择实际参与失败的来源；不改变抽样次数。
+    // 各候选来源保留 key/raw，长度冲突或容量错误时定位到实际来源。
     static function int container_size_schema(string root, int defsz,
                                                string schema_id,
                                                int max_size = -1);
@@ -1813,9 +1704,7 @@ class aip_struct_runtime;
         if (defsz < 0 || defsz > 1000000)
             fail($sformatf("invalid DEFAULT_SIZE %0d", defsz));
 
-        // Root-level overall rules (including a direct compact record list)
-        // and scalar-field overall/generator rules all participate in length
-        // inference.  A `.each` rule is intentionally excluded.
+        // Root overall (incl. a compact record list) and field overall/generator rules infer the length; .each never does.
         l = lookup(root);
         if (l.found && l.value != "") begin
             overalls.push_back(l.value);
@@ -1823,8 +1712,7 @@ class aip_struct_runtime;
         end
         if (schema_id == "") collect_container_overalls_with_sources(root, overalls, overall_keys);
         else begin
-            // Validate every canonical outer-each descendant even when some
-            // other rule already determines the container length.
+            // Validates outer-each descendants even when another rule already fixes the length.
             schema_has_each = has_container_each_schema(root, schema_id);
             collect_container_overalls_schema_with_sources(root, schema_id, overalls, overall_keys);
         end
@@ -1885,10 +1773,8 @@ class aip_struct_runtime;
         return n;
     endfunction
 
-    // Static schema containers use zero-based dynamic temporaries internally,
-    // so validate the complete unpacked range before any element select,
-    // temporary allocation, or target write.  $size alone cannot distinguish
-    // [0:N-1] from non-zero or descending declarations of the same length.
+    // Static arrays are copied through zero-based temporaries, so require [0:N-1] before any select or write;
+    // $size alone cannot tell it from offset or descending ranges of the same length.
     static function void validate_static_array_range(string path,
                                                      int unpacked_dimensions,
                                                      int left_index,
@@ -1909,8 +1795,6 @@ class aip_struct_runtime;
                 path, left_index, right_index, expected_right));
     endfunction
 
-    // 校验静态容器的 overall/生成器长度并拒绝 .size；保留各字段来源避免长度
-    // 推导后只剩容器根名，metadata 和动态数组语义由调用方决定。
     static function void validate_static_container_length(string root,
                                                            string schema_id,
                                                            int fixed_size,
@@ -1924,8 +1808,7 @@ class aip_struct_runtime;
             aip_cmdline_diagnostic::select_value(size_key, size_rule.value);
             fail($sformatf("%s.size not allowed for static array", root));
         end
-        // Static containers do not need each for length inference, but every
-        // known each descendant still must obey nested-array selectors.
+        // Result unused: called so known .each descendants are still checked for nested-array selectors.
         void'(has_container_each_schema(root, schema_id));
         if (root_overall != "") begin
             overalls.push_back(root_overall);
@@ -1968,8 +1851,7 @@ class aip_struct_runtime;
             fail($sformatf("%s size %0d exceeds MAX_SIZE %0d", root, n, int'(max_size)));
     endfunction
 
-    // 校验已匹配容器的索引拼写和边界；底层索引转换也沿用该 key 的实际配置原文。
-    // 未匹配路径保持忽略，失败时不进入后续 foreach 写入。
+    // 写入前校验，失败即终止；先选中 key 原文，使底层索引转换失败也能定位。
     static function void validate_indexed_bounds(string root, int n);
         string keys[$]; string args[$];
         uvm_cmdline_processor clp;
@@ -2009,8 +1891,7 @@ class aip_struct_runtime;
         end
     endfunction
 
-    // schema 容器仅校验注册字段的 indexed 后代，无关子系统参数不参与边界检查。
-    // 已识别字段先选择 key/raw，再检查 selector 和索引，使 fatal 指向真实配置项。
+    // 只校验已注册字段的 indexed 后代，其他子系统的同前缀参数不参与边界检查。
     static function void validate_indexed_bounds_schema(string root, int n,
                                                          string schema_id);
         string keys[$];
@@ -2096,12 +1977,8 @@ class aip_struct_runtime;
             ignored = overall_slot(s, 0, root, found);
     endfunction
 
-    // Build a primitive-queue slot plan without parsing a value expression.
-    // Indexed rules win over the corresponding overall slot, and an overall
-    // slot wins over `.each`.  Keeping selection separate from parsing avoids
-    // validating or drawing a shadowed rule.  Permutations are prewarmed by
-    // prepare_container_generator() before this helper is called because the
-    // full shuffle is the documented eager-RNG exception.
+    // Picks the winning rule without parsing it (indexed > overall slot > .each), so shadowed rules are never
+    // validated or drawn. perm: overalls must be prewarmed first: the full shuffle is the one eager-RNG exception.
     static function lookup_t queue_slot_rule(string full_root,
                                              string leaf_root,
                                              lookup_t overall_rule,
@@ -2140,12 +2017,8 @@ class aip_struct_runtime;
         return '{found:0, value:"", source:0, from_each:0};
     endfunction
 
-    // Build a primitive schema-array slot plan without parsing or drawing any
-    // value expression.  This mirrors the primitive-queue winner ordering but
-    // keeps schema lookup rooted at the typed field (including inherited outer
-    // selectors).  A caller that accepts an integral `perm` overall rule must
-    // prewarm it before planning slots; that full shuffle is the sole eager-RNG
-    // exception.
+    // Same winner order as queue_slot_rule, but looked up from the typed field (incl. inherited outer selectors);
+    // an integral perm: overall must likewise be prewarmed first.
     static function lookup_t schema_array_slot_rule(string root,
                                                     string field,
                                                     lookup_t overall_rule,
@@ -2206,7 +2079,7 @@ class aip_struct_runtime;
         end
     endfunction
 
-    // 预备字段生成器；检查或展开前选择该字段整条原文，不把失败归因于此前处理的字段。
+    // 预热 perm 洗牌并校验整数生成器位宽；先选中各字段原文，失败不会归因于上一个字段。
     static function void prepare_field_generators(string root,
                                                   string schema_id);
         string names[$];
@@ -2214,9 +2087,7 @@ class aip_struct_runtime;
         lookup_t rule;
         bit found;
         collect_schema_scalar_suffixes(schema_id, "", names);
-        // Registration order is stable, but canonical lexical order makes
-        // draw order independent of how an associative metadata producer was
-        // populated.
+        // Lexical order keeps draw order independent of how the metadata map was populated.
         for (int i = 1; i < names.size(); i++) begin
             int j;
             tmp = names[i];
@@ -2244,9 +2115,7 @@ class aip_struct_runtime;
         end
     endfunction
 
-    // Select a scalar generator slot using the same innermost concrete field
-    // key used by prepare_field_generators().  This avoids parsing an outer
-    // index as though the complete nested suffix were one integer.
+    // Keyed by the innermost field like prepare_field_generators(), so a nested suffix is not parsed as one index.
     static function string scalar_generator_slot(string full_root,
                                                   string field,
                                                   string raw,
@@ -2264,17 +2133,13 @@ class aip_struct_runtime;
                                          int extent = -1);
         string prefix;
         string stale[$];
-        // The second (each) pass must retain the fixed descriptors collected
-        // during PHASE_FIXED.  A nested apply invokes this function once per
-        // pass as well, so only the fixed/normal pass starts a fresh context.
+        // Only the fixed/normal pass resets: PHASE_EACH keeps the fixed descriptors, and nested applies call this once per pass.
         if (materialization_phase != PHASE_EACH)
             field_names[root].delete();
         if (schema_id != "") container_schema[root] = schema_id;
         if (extent >= 0) container_sizes[root] = extent;
         prefix = {root, "|"};
-        // A repeated apply to the same ROOT must not retain descriptors from
-        // a previous extent.  Collect keys first, then delete from every
-        // parallel map so nested container applies remain independent.
+        // A repeated apply must not see descriptors from a previous extent; collect keys, then purge every parallel map.
         if (materialization_phase != PHASE_EACH)
             foreach (field_typed_kinds[k])
                 if (aip_str::str_find(k, prefix) == 0) stale.push_back(k);
@@ -2296,10 +2161,7 @@ class aip_struct_runtime;
         end
     endfunction
 
-    // Decode the generated element root (`ROOT[index]` or a nested indexed
-    // root) into the common associative-array key components used by both the
-    // legacy snapshots and the typed descriptor maps.  A scalar apply has no
-    // index and is intentionally not recorded for container postprocessing.
+    // ROOT[i] (or a nested indexed root) -> base/idx/suffix key; scalar roots return 0 and are deliberately not recorded.
     static function bit field_location(string full_root, string field,
                                        output string base, output int idx,
                                        output string suffix, output string key);
@@ -2309,9 +2171,7 @@ class aip_struct_runtime;
         idx = -1;
         suffix = "";
         key = "";
-        // Use the innermost/last index segment.  A nested struct-array child
-        // is itself a container (e.g. ROOT[0].kids[1]); descriptors for that
-        // child must be keyed by ROOT[0].kids, not by the outer ROOT.
+        // Innermost index: ROOT[0].kids[1] is keyed by its own container ROOT[0].kids, not the outer ROOT.
         b = -1;
         for (int p = 0; p < full_root.len(); p++)
             if (full_root[p] == "[") b = p;
@@ -2327,11 +2187,8 @@ class aip_struct_runtime;
         return 1;
     endfunction
 
-    // 记录正在消费的字段原文，使空值/字符串转换等前置失败也能显示该字段。
-    // Capture whether the winning lookup came from an `each` rule.  The
-    // actual typed descriptor is recorded separately by the scalar adapter;
-    // this metadata is deliberately independent so redraw can replace only
-    // the colliding field later.
+    // 同时选中该字段原文，使空值、字符串转换等前置失败也能定位到它。
+    // Provenance is kept apart from the typed descriptor so redraw can replace only the colliding field.
     static function void mark_typed_source(string full_root, string field,
                                             input bit from_each,
                                             input string each_raw);
@@ -2365,9 +2222,7 @@ class aip_struct_runtime;
         endcase
     endfunction
 
-    // Return the extent of the innermost container represented by a generated
-    // element root.  The apply macro records this before either materialization
-    // pass, so conflict checks can also inspect fixed values at later indices.
+    // The extent is recorded before either pass, so conflict checks also see fixed values at later indices.
     static function int typed_container_extent(string full_root);
         string base, suffix, key;
         int idx;
@@ -2378,12 +2233,8 @@ class aip_struct_runtime;
         return 0;
     endfunction
 
-    // Check the current descriptor against every materialized slot in the same
-    // container.  During PHASE_EACH, future `.each` slots still hold a fixed
-    // pass placeholder; those slots are deliberately skipped until their own
-    // candidate is materialized.  Earlier `.each` values and fixed values at
-    // either side remain eligible conflicts, allowing an earlier redraw to
-    // avoid a later fixed value.
+    // Later .each slots still hold fixed-pass placeholders and are skipped; earlier .each values and fixed
+    // values on either side still conflict, so a redraw can avoid a later fixed value.
     static function bit typed_current_conflicts(string full_root, string field,
                                                 input int extent = -1);
         string base, suffix, key, prior;
@@ -2403,7 +2254,6 @@ class aip_struct_runtime;
         return 0;
     endfunction
 
-    // 查询并校验字段 unique 开关；校验期间使用控制键上下文，返回后恢复当前字段来源。
     static function bit typed_unique_enabled(string full_root, string field);
         string base, suffix, key;
         string selected_key;
@@ -2429,8 +2279,6 @@ class aip_struct_runtime;
         int p;
         b = -1;
         if (!field_location(full_root, "__aip_dummy", base, idx, suffix, key)) begin
-            // The field name is irrelevant to the container extent; find the
-            // last index directly when the caller supplies a scalar root.
             for (p = 0; p < full_root.len(); p++)
                 if (full_root[p] == "[") b = p;
             if (b <= 0) return 100;
@@ -2449,9 +2297,7 @@ class aip_struct_runtime;
         return {full_root, ".each.", field, ".unique"};
     endfunction
 
-    // Account for one extra draw across the entire container/suffix, rather
-    // than resetting a local counter for every record.  The caller supplies
-    // the canonical diagnostic when this returns false.
+    // The redraw budget is shared by the whole container/suffix, not reset per record; the caller reports exhaustion.
     static function bit consume_typed_redraw(string full_root, string field);
         string base, suffix, key;
         int idx, limit;
@@ -2467,10 +2313,8 @@ class aip_struct_runtime;
         return 1;
     endfunction
 
-    // Parse a simple literal without invoking the randomizing value parser.
-    // This is used only by finite-candidate analysis.  Keep the same 1026-bit
-    // signed working width as the normal integer resolver so finite ranges
-    // remain analyzable for every supported 1..1024-bit target type.
+    // Non-random literal parse for finite-candidate analysis; same 1026-bit signed width as the integer
+    // resolver so ranges stay analyzable for every 1..1024-bit target.
     static function bit finite_int_literal(string token,
                                             output aip_svec_t value);
         aip_vec_t v;
@@ -2484,9 +2328,7 @@ class aip_struct_runtime;
         return 1;
     endfunction
 
-    // 候选预检的非随机 real 转换：完整消费 token，检查位模式和十进制上界。
-    // 不使用通用 str_to_real 的前缀转换，避免把 1.0:2.0 错当成单值 1.0；
-    // 失败返回 0 交给调用方选择正式校验，不在预检中改变 RNG 状态。
+    // 预检用非随机 real 转换：须完整消费 token，不用 str_to_real 的前缀转换，以免把 1.0:2.0 当成 1.0。
     static function bit finite_real_literal(string token,
                                              output real value);
         string cleaned, trailing;
@@ -2497,14 +2339,12 @@ class aip_struct_runtime;
         if (cleaned == "") return 0;
         matched = $sscanf(cleaned, "%g%s", value, trailing);
         if (matched != 1) return 0;
-        // 非有限值不能参与候选计数；与正式转换使用同一位模式检查。
         if (!aip_cmdline_real::is_finite(value) || aip_cmdline_real::decimal_overflow(token)) return 0;
         return 1;
     endfunction
 
-    // 为常见 .each 表达式提供有限候选文本集，供唯一性容量预检；不消费 RNG。
-    // 负返回值表示无法有界枚举，调用者回退到有限次数重抽样；可枚举权重组
-    // 只计入正权重候选，零权重项不能占用可选容量，语法检查仍由严格解析负责。
+    // 枚举常见 .each 表达式的有限候选，不消费 RNG，也不做语法检查（归严格解析）。
+    // 返回负值表示无法有界枚举，调用方回退到有限次重抽样。
     static function int finite_candidate_tokens(string raw,
                                                 output string values[$],
                                                 input int target_kind = 1);
@@ -2527,13 +2367,8 @@ class aip_struct_runtime;
             end
         end
 
-        // Real ranges and weighted groups are continuous/random expressions,
-        // not finite candidate sets.  Keeping them on the bounded rejection
-        // path is important: treating `1.0:2.0` as a singleton would make a
-        // unique preflight report a false shortage (or, worse, accept a
-        // duplicate that the resolver could have avoided).  A real inc/dec
-        // expression is the one exception: its indexed values are genuinely
-        // discrete, so enumerate it when the sequence is small enough.
+        // Real ranges/weighted groups are continuous, not finite sets (treating 1.0:2.0 as a singleton would
+        // fake a unique shortage); only real inc/dec is discrete and is enumerated when small enough.
         if (target_kind == 3) begin
             if (aip_str::str_find(s, "inc:") == 0 ||
                 aip_str::str_find(s, "dec:") == 0) begin
@@ -2555,17 +2390,12 @@ class aip_struct_runtime;
                 for (ri = 0; ri < real_count; ri++) begin
                     rvalue = is_inc ? (rstart + ri * rstep) :
                                       (rstart - ri * rstep);
-                    // 17 significant digits round-trip an IEEE-754 double;
-                    // `%g`'s default six digits would collapse close values.
+                    // %0.17g round-trips an IEEE-754 double; plain %g (6 digits) would merge close values.
                     values.push_back($sformatf("%0.17g", rvalue));
                 end
                 return values.size();
             end
 
-            // A bracketed/colon range, weighted group, or any other colon
-            // expression is continuous for real fields.  Do not feed it to
-            // typed_literal_descriptor(), whose `%g` conversion is prefix
-            // tolerant by design.
             if (aip_str::str_find(s, ":") >= 0 ||
                 (s.len() > 0 && (s[0] == "{" || s[0] == "(" || s[0] == "[")))
                 return -1;
@@ -2581,8 +2411,6 @@ class aip_struct_runtime;
             return values.size();
         end
 
-        // Scalar inc/dec expressions are finite when their endpoint and step
-        // can be enumerated within the fixed 65,536-candidate bound.
         if (target_kind == 1 &&
             (aip_str::str_find(s, "inc:") == 0 ||
              aip_str::str_find(s, "dec:") == 0)) begin
@@ -2604,8 +2432,7 @@ class aip_struct_runtime;
             return values.size();
         end
 
-        // A bracketed or unwrapped integer colon form is a finite unit-step
-        // range.  Real/string/enum colons are ordinary token characters.
+        // Integer lo:hi (bracketed or not) is a unit-step range; for string/enum a colon is an ordinary character.
         if (target_kind == 1 && s.len() >= 3 &&
             s[0] == "[" && s[s.len()-1] == "]") begin
             colon = aip_str::str_find(s, ":");
@@ -2635,7 +2462,7 @@ class aip_struct_runtime;
             end
         end
 
-        // 只枚举可达的左侧值集；正权重的数值只改变概率，零权重直接禁用整项。
+        // 权重组：只枚举可达的左侧值；正权重只影响概率，零权重禁用整项。
         if (s.len() >= 2 &&
             ((s[0] == "{" && s[s.len()-1] == "}") ||
              (s[0] == "(" && s[s.len()-1] == ")"))) begin
@@ -2678,11 +2505,8 @@ class aip_struct_runtime;
         foreach (parts[wi]) begin
             token = aip_str::strip(parts[wi]);
             if (token == "") return -1;
-            // The cutoff is defined over raw candidates, before textual or
-            // typed deduplication.  Retaining duplicates here lets callers
-            // apply the 65,536 boundary first and only then collapse values
-            // after the target-type cast (for example -1 and 8'hff in an
-            // 8-bit container).
+            // Keep duplicates: the 65,536 cutoff counts raw candidates; callers dedup only after
+            // the target-type cast (e.g. -1 and 8'hff in an 8-bit container).
             values.push_back(token);
             if (values.size() > 65536) return -1;
         end
@@ -2690,10 +2514,7 @@ class aip_struct_runtime;
         return n;
     endfunction
 
-    // Convert one finite candidate token into the descriptor representation.
-    // Enum names require the enum's declared name table and are intentionally
-    // left to the bounded redraw path; integral/string/real leaves are fully
-    // lossless here.
+    // Finite candidate token -> lossless descriptor; 0 = not exactly representable (caller falls back to bounded redraw).
     static function bit typed_literal_descriptor(string token, int kind,
                                                  int width,
                                                  output logic [1023:0] bits,
@@ -2711,11 +2532,8 @@ class aip_struct_runtime;
             1: begin
                 if (!aip_str::str_to_vec(aip_str::strip(token), v,
                                          explicit_width, negative)) return 0;
-                // Match aip_cmdline#(T)::parse_single_num: an explicit
-                // literal width may not exceed the target field width, and
-                // the magnitude must fit the target bit pattern before the
-                // final signed/unsigned cast.  Do not silently turn an
-                // invalid oversized token into a valid truncated candidate.
+                // Same rules as aip_cmdline#(T)::parse_single_num: explicit width and magnitude must fit the
+                // target, so an oversized token never becomes a valid truncated candidate.
                 if (width > 0 && explicit_width > width) return 0;
                 if (width > 0 && width < 1024 && (v >> width) != 0) return 0;
                 if (negative) v = -v;
@@ -2783,11 +2601,8 @@ class aip_struct_runtime;
         end
     endfunction
 
-    // unique 固定值检查选择控制原文，候选解析则切换 each 原文，避免沿用末尾元素来源。
-    // Preflight finite `.each` candidate capacity after all fixed slots have
-    // been materialized.  This is intentionally descriptor-only: no parser
-    // call that consumes RNG is made here.  A negative finite count delegates
-    // to the normal bounded rejection path.
+    // Checks finite .each candidate capacity once all fixed slots are materialized; descriptor-only,
+    // no RNG-consuming parser call. Fields without a finite candidate set are left to bounded redraw.
     static function void preflight_unique(string root, int extent,
                                            string schema_id);
         string names[$];
@@ -2896,8 +2711,7 @@ class aip_struct_runtime;
         if (!seen) field_names[base].push_back(suffix);
     endfunction
 
-    // Store a packed integral/enum key without passing through a textual
-    // formatter.  `kind` is 1 for integral and 4 for enum.
+    // kind: 1 = integral, 4 = enum.
     static function void record_typed_bits(string full_root, string field,
                                             input logic [1023:0] bits,
                                             input int width,
@@ -2910,8 +2724,7 @@ class aip_struct_runtime;
         field_width[key] = width;
         field_signed[key] = is_signed;
         field_typed_kinds[key] = kind;
-        // Keep a presence marker in the legacy map so old diagnostic tools
-        // that enumerate field keys continue to see the same paths.
+        // Presence marker in the legacy map: old diagnostic tools enumerate field keys from it.
         field_values[key] = "";
         field_kinds[key] = kind;
         remember_field_name(base, suffix);

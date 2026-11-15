@@ -1,13 +1,11 @@
-# tests/paused_injection：正式暂停注入API的真实业务断言。
-# 依赖test_cmd_wait的真实UVM seq/driver和公开loader；Tcl只拥有ticket与
-# 原脚本的局部状态，不读取队列私有槽、不替换生产proc、不模拟调度完成。
+# 正式暂停注入 API 的真实业务断言；不读取队列私有槽、不替换生产 proc、不模拟调度完成。
 set ::pi_checks 0
 set ::pi_returned 0
 set ::pi_suffix 0
 set ::pi_mode $::env(AIP_INJECTION_MODE)
 if {$::pi_mode eq "manual"} { set ::aip_ack_timeout_ns 1000000 }
 
-# 每条检查必须基于真实读回值；异常由外层PTY捕获，不能仅凭simv退出码通过。
+# 检查须基于真实读回值；异常由外层 PTY 捕获。
 proc pi_check {name condition} {
     if {!$condition} { error "AIP_INJECTION_FAIL $name" }
     incr ::pi_checks
@@ -85,8 +83,7 @@ proc pi_foreign {} {
     puts AIP_INJECTION_FOREIGN_PASS
 }
 
-# 显式提交只确认排队，不把同handle后续请求伪报STARTED；取消和排队超时
-# 均不能修改原请求参数。超时仅作用于测试新job，不取消原业务。
+# 显式提交只确认排队，不把同 handle 后续请求伪报 STARTED；取消与排队超时都不能修改原请求参数。
 proc pi_queue {} {
     set ::pi_first [aip_submit {cw_seq ns=40 tag=FIRST code=23}]
     set ::pi_second [aip_submit {cw_seq ns=10 tag=SECOND code=29}]

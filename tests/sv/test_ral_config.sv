@@ -1,5 +1,5 @@
-// Task1 fixture/报告底座与Task3配置索引契约；不启动ral_op/ral_test/policy runner。
-// test拥有run数据及输出文件，env拥有独立四态物理存储，不以mirror自证。
+// RAL fixture/报告底座与配置索引契约测试；不启动 ral_op/ral_test/policy runner。
+// env 持有独立四态物理存储，不以 mirror 自证。
 `include "aip_core_pkg.sv"
 `include "aip_ral_fixture.sv"
 package ral_config_test_pkg;
@@ -15,17 +15,16 @@ package ral_config_test_pkg;
     endclass
     class foundation_test_hook extends aip_ral_test_hook;
         int quiesces,resumes;
-        // 接入接口计数正控，Task2生命周期尚未实现。
+        // 仅作接口调用计数正控。
         virtual task quiesce(uvm_reg_block root,output bit ok,output string detail);
             quiesces++; ok=(root!=null); detail=ok?"":"null root";
         endtask
-        // 只记录接口恢复调用，不修改fixture存储。
         virtual task resume(uvm_reg_block root,output bit ok,output string detail);
             resumes++; ok=(root!=null); detail=ok?"":"null root";
         endtask
     endclass
     class foundation_classifier extends aip_ral_response_classifier;
-        // 保守分类接口正负控，null响应不能冒充已完成。
+        // null 响应不能冒充已完成。
         virtual function aip_ral_bus_status_e classify(uvm_sequence_item request,
             uvm_sequence_item response,uvm_status_e uvm_status,output string detail);
             if(request!=null && response!=null && uvm_status==UVM_IS_OK) begin detail=""; return AIP_RAL_BUS_OK; end
@@ -57,13 +56,10 @@ package ral_config_test_pkg;
         `uvm_component_utils(ral_foundation_test)
         aip_ral_fixture_env env;
         int checks,records;
-        // 构造测试；输出文件在run_phase关闭。
         function new(string name,uvm_component parent); super.new(name,parent); endfunction
-        // 创建真实生成模型环境，不注册未实现命令。
         virtual function void build_phase(uvm_phase phase);
             super.build_phase(phase); env=new("env",this);
         endfunction
-        // 所有失败阻止最终COMPLETE标记。
         function void demand(bit condition,string label0);
             if(!condition) `uvm_fatal("RAL_CONFIG_ASSERT",label0)
             checks++;
@@ -123,7 +119,7 @@ package ral_config_test_pkg;
             report0.detail=encoded;
             demand(aip_ral_formatter::format_report(report0,0,result_text,required0,why)==AIP_RAL_CFG_BAD_ARG && result_text=="" && why!="","invalid_text_explicit_status");
         endtask
-        // 唯一叶ID、计数和优先级属于单次run，不实现任何policy测试器。
+        // 叶 ID、计数和优先级属于单次 run。
         task test_ledger();
             aip_ral_run_state run0=new(),pass0=new();
             aip_ral_leaf_id_t ids[5],id0;
@@ -191,8 +187,7 @@ package ral_config_test_pkg;
             demand(classifier0.classify(item0,item0,UVM_IS_OK,why)==AIP_RAL_BUS_OK && why=="","classifier_positive");
             demand(classifier0.classify(item0,null,UVM_IS_OK,why)==AIP_RAL_BUS_ERROR && why!="","classifier_null_response_negative");
         endtask
-        // Task3配置红灯：先验证公共注册API的状态契约，再检查冻结后的名称索引。
-        // 该用例只验证配置/索引，不发起新的DUT访问，也不把mirror当作oracle。
+        // 先验证公共注册 API 的状态契约，再检查冻结后的名称索引；不发起 DUT 访问，也不以 mirror 为 oracle。
         task test_config_api();
             aip_ral_service svc;
             aip_ral_cfg_status_e cfg_st;

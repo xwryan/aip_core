@@ -1,24 +1,16 @@
-// src/sv/bridge：为 Socket/Tcl 命令注册表提供受控的 DUT HDL 访问白名单。
-// 依赖 aip_cmd 的逐调用结果上下文、aip_str/aip_time 以及 UVM HDL backdoor；
-// 不求值任意 UCLI/Tcl 文本。注册对象由命令框架持有，结果属于当前调用；
-// 旧式直接 SV 调用由临时 scope 保护并在返回时更新兼容全局槽。该 scope
-// 由本次方法调用拥有，取消时由框架惰性回收。force 的 HDL 生命周期独立：显式 release 或
-// force_signal_time 正常完成才释放；取消后台调用不会自动回滚已生效的 force。
+// 为 Socket/Tcl 命令注册表提供受控的 DUT HDL 访问白名单（不求值任意 UCLI/Tcl 文本），结果属于当前调用。
+// force 的 HDL 生命周期独立：显式 release 或 force_signal_time 正常完成才释放，取消后台调用不会回滚已生效的 force。
 `ifndef AIP_DUT_CONTROL_SV
 `define AIP_DUT_CONTROL_SV
 
-// 静态 facade 保留旧 task 签名：命令内复用上下文，直接 SV 调用自行建立
-// 临时上下文，不能放松 set_result 的无上下文错误检查。内部方法复用返回
-// null 的 scope 不需收尾；直接入口在每条正常/失败返回路径释放自有 scope。
-// facade 专用 setter 在 legacy 用户 task 中保留即时全局返回及后续覆盖语义，
-// 在 local/typed 命令中仍写独立上下文；不放松普通 set_result 的严格检查。
-// 同一 HDL 对象的并发 force/release 仍由调用方排序，结果隔离不等于信号互斥。
+// 静态 facade 保留旧 task 签名：命令内复用当前上下文，直接 SV 调用自建临时 scope 并在每条返回路径释放，
+// legacy 用户 task 中保留即时全局返回语义。结果隔离不等于信号互斥：同一 HDL 对象的并发 force/release 由调用方排序。
 class aip_dut_control_ops;
     // readmem 文件先完整解析到队列，再开始写 DUT；因此文件格式错误不会留下
     // 半装载状态。真正 backdoor 写失败时，之前已经 deposit 的元素无法回滚。
     typedef longint unsigned aip_dut_mem_addr_t;
 
-    // 将合法数值转为 UVM HDL 数据；空串或解析/位宽溢出失败时输出零并返回 0。
+    // 失败时输出零并返回 0。
     static function bit decode_value(string text, output uvm_hdl_data_t value);
         int width;
         longint unsigned parsed;
@@ -37,7 +29,6 @@ class aip_dut_control_ops;
         return 1;
     endfunction
 
-    // 立即 force 指定 HDL 对象；参数或 backdoor 失败写入本次命令错误结果。
     static task force_signal(string path, string value_text);
         uvm_hdl_data_t value;
         aip_cmd_result_context result_scope;
@@ -52,8 +43,7 @@ class aip_dut_control_ops;
         aip_cmd::end_compat_result_scope(result_scope);
     endtask
 
-    // force 后等待给定时间再释放；后台模式只改变调用方等待，不缩短持续时间。
-    // 路径/时间非法或 force/release 失败均返回非零；调用被 kill 时不保证释放。
+    // 后台模式只改变调用方等待，不缩短持续时间；调用被 kill 时不保证释放。
     static task force_signal_time(string path, string value_text, string time_text);
         uvm_hdl_data_t value;
         real duration_ns;
@@ -82,7 +72,6 @@ class aip_dut_control_ops;
         aip_cmd::end_compat_result_scope(result_scope);
     endtask
 
-    // deposit 不建立持续 force；非法数值或不可写路径返回本次调用失败。
     static task deposit_signal(string path, string value_text);
         uvm_hdl_data_t value;
         aip_cmd_result_context result_scope;
@@ -97,7 +86,7 @@ class aip_dut_control_ops;
         aip_cmd::end_compat_result_scope(result_scope);
     endtask
 
-    // 读取 HDL 对象并以十六进制结果返回；空路径或读失败不伪造零值成功。
+    // 读失败不伪造零值成功。
     static task get_signal(string path);
         uvm_hdl_data_t value;
         aip_cmd_result_context result_scope;
@@ -111,7 +100,7 @@ class aip_dut_control_ops;
         aip_cmd::end_compat_result_scope(result_scope);
     endtask
 
-    // 解除指定路径的 force；不假设该路径由哪条历史命令 force，失败显式返回。
+    // 不假设该路径由哪条命令 force；失败显式返回。
     static task release_signal(string path);
         aip_cmd_result_context result_scope;
         result_scope = aip_cmd::begin_compat_result_scope();
