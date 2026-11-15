@@ -23,6 +23,7 @@ import uvm_pkg::*;
 
 // 实现依赖顺序不可随意交换：基础解析 -> schema 公共运行时 -> 类型化数组 -> 严格队列。
 `include "core/cmdline/aip_cmdline_scalar.sv"
+`include "core/cmdline/aip_cmdline_query.sv"
 `include "core/cmdline/aip_struct_runtime.sv"
 `include "core/cmdline/aip_struct_arrays.sv"
 `include "core/cmdline/aip_cmdline_queues.sv"

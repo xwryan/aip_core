@@ -126,6 +126,19 @@
             `aip_info(("[aip_cmdline] param '%s' (scope='%s') = %0d (0x%0h)", `"name`", path, name, name)); \
     end
 
+// 无符号参数：先拒绝负数字面量再按 aip_int 读取（aip_int 会把 -1 读成全 1，适合位掩码，
+// 不适合计数/地址/ID 这类参数）。
+`define aip_uint(path,rtype,name,default_val=0) \
+    begin \
+        string _aip_raw; \
+        _aip_raw = aip_cmdline#(rtype)::get_cmdline_string(`"name`", path); \
+        if (aip_str::str_find(_aip_raw, "-") >= 0) \
+            aip_cmdline_diagnostic::report("[AIP_CMDLINE]", \
+                $sformatf("%s.%s requires an unsigned value: %s", path, `"name`", _aip_raw), \
+                `__FILE__, `__LINE__); \
+        `aip_int(path, rtype, name, default_val) \
+    end
+
 `define aip_string(path,name,default_val="") \
     begin \
         aip_cmdline#(string)::get_single_value(`"name`", path, default_val, name, `__FILE__, `__LINE__); \
