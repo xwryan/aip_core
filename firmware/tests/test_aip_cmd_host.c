@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <assert.h>
+#include <stddef.h>
 #include "aip_cmd.h"
 
 static aip_mailbox_t fake_mbox;
@@ -69,6 +70,19 @@ int main(void) {
     assert(fake_mbox.cmd_flag == 0);
     fake_mbox.async_flag = 0;
 
-    printf("L1 PASS: 5 tests\n");
+    /* T6: mailbox layout must match SV aip_cpu_bridge offsets (one 32-bit word
+     * per character; rsp_flag at +0x208 means cmd_data holds 128 words). */
+    assert(offsetof(aip_mailbox_t, cmd_data)     == 0x008);
+    assert(offsetof(aip_mailbox_t, rsp_flag)     == 0x208);
+    assert(offsetof(aip_mailbox_t, rsp_status)   == 0x20C);
+    assert(offsetof(aip_mailbox_t, rsp_len)      == 0x210);
+    assert(offsetof(aip_mailbox_t, rsp_data)     == 0x214);
+    assert(offsetof(aip_mailbox_t, async_flag)   == 0x414);
+    assert(offsetof(aip_mailbox_t, exit_flag)    == 0x418);
+    assert(offsetof(aip_mailbox_t, exit_code)    == 0x41C);
+    assert(offsetof(aip_mailbox_t, irq_ack_flag) == 0x420);
+    assert(sizeof(aip_mailbox_t) <= MBOX_BOOT_READY_OFF);
+
+    printf("L1 PASS: 6 tests\n");
     return 0;
 }

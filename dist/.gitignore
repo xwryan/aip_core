@@ -1,0 +1,5 @@
+# Build outputs are platform-specific and are recreated by `make all`.
+/lib/*.so
+/bin/aip-client
+/include/aip_plugin.h
+/.generated/

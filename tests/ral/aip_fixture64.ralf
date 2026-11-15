@@ -1,0 +1,11 @@
+# tests/ral：Task1 默认64位真实生成模型；TB拥有模型及物理存储。
+# 只提供宽访问与非整字节虚拟field几何，不包含产品policy执行器。
+register WIDE { bytes 8; field DATA { bits 64; access rw; reset 0; } }
+memory RAM { size 4; bits 64; access rw; }
+virtual register VIEW {
+  bytes 8;
+  field LODATA { bits 13; access rw; };
+  field HIDATA { bits 51; access rw; };
+}
+block leaf { bytes 4; register WIDE @0; memory RAM @0x100; virtual register VIEW=VIEW[1] RAM @0; }
+system aip_fixture { bytes 4; block leaf=LEAF @0x200; }

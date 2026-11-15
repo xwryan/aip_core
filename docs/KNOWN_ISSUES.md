@@ -14,17 +14,17 @@ C908 是 64-bit (RV64GCB[V] per official datasheet). RV32 编译的压缩指令
 misdecode 的压缩指令 → Illegal Instruction trap → mtvec=0 → 跳 0.
 
 **修复 (已落地, 用 XuanTie 官方 startup.S 替换自写 crt0)**
-- `firmware/Makefile.inc`:
+- `firmware/Makefile`:
   - `ARCH = rv64gc`  (原 `rv32imc_zicsr`)
   - `ABI  = lp64`    (原 `ilp32`)
   - `CFLAGS += -mcmodel=medany` (0x80000000+ 符号超 medlow 2GB)
-- `firmware/startup.S` (XuanTie CSI 官方, 替代之前自写 `crt0_c908.S`):
+- `firmware/arch/startup.S` (XuanTie CSI 官方, 替代之前自写 `crt0_c908.S`):
   - 设 `mtvec = __Vectors|1` (vectored, 非 0 — 关键, 避免 trap 跳 0)
   - 标准 sp/gp 初始化, 调 `pre_main`
-- `firmware/linker.xuantie.ld` (XuanTie xiaohui linker patched, 替代旧 3 模式 linker):
+- `firmware/arch/linker.xuantie.ld` (XuanTie xiaohui linker patched, 替代旧 3 模式 linker):
   - XIP: ROM 0x80000000/32K + RAM 0x80008000/864K + MBOX @ 0x800E0000
-- `firmware/{csi_config.h, handlers.c}`: CSI 配置 + Default_Handler/pre_main stubs
-- `firmware/prebuilt/rom_boot.{hex,elf,map}`: 用 XuanTie 官方 toolchain 重生成
+- `firmware/core/{csi_config.h, handlers.c}`: CSI 配置 + Default_Handler/pre_main stubs
+- `firmware/prebuilt/{poll,msip,plic}.{hex,elf,map}`: 用 XuanTie 官方 toolchain 重生成
 
 **No-FPU C908 配置**
 若你 C908 实例无 FPU, 重 build:
@@ -41,59 +41,6 @@ SV 后门 load OK ≠ CPU bus fetch OK. RV64 build 后若仍跳 0, 读 mcause/me
 
 ---
 
-## TCL `fw_reload` result string empty (dispatch OK, result not propagated)
-
-**Symptom**
-```tcl
-% fw_reload mode=rom_boot file=/path/to/x.hex
-... [tcl_cmd] echo ...
-% puts "status=[aip_check_status] result=[aip_read_result]"
-status=0 result=
-```
-
-**Root cause**
-`aip_cmd_str_2i` macro (`aip_cmd.sv:697-712`) writes only `this.status = 0`
-after the registered svtask. It does NOT propagate
-`aip_cmd::__aip_cmd_last_result` back to `this.result_out`. `aip_cmd::exec`
-then copies the empty `handle.result_out` to the global, overwriting whatever
-facade.load wrote.
-
-**Status**
-- Dispatch path is fully functional end-to-end: TCL → unknown override →
-  aip_send_cmd → force signals → _vcs_run → SV `aip_cmd::exec` → `facade.load`
-  → `inst.load()`.
-- All inputs (mode, file, multi-space args) parse correctly.
-- Only the result echo back to TCL is empty; the load itself executes.
-
-**Workaround**
-- SV-side direct invocation in TB code (not via TCL):
-  ```sv
-  loader.mode    = "rom_boot";
-  loader.fw_path = "/path/to/x.hex";
-  loader.load();
-  ```
-- Verify load success by reading first ROM bytes after dispatch:
-  ```tcl
-  % fw_reload mode=rom_boot file=x.hex
-  % cpu_read32 addr=0x80000000
-  ```
-  Returns 0 → ROM not written (base/path config issue, not dispatch).
-  Returns crt0 instruction (e.g. `0x000E0117`) → load succeeded.
-
-**Proper fix (future)**
-Modify `aip_cmd_str_2i` (and sibling `_str_1i1i` / `_1i1s` / `_4i` etc.) to
-reset and propagate `aip_cmd::__aip_cmd_last_status/_result` around the svtask:
-```sv
-aip_cmd::__aip_cmd_last_status = 0;
-aip_cmd::__aip_cmd_last_result = "";
-svtask(...);
-this.status     = aip_cmd::__aip_cmd_last_status;
-this.result_out = aip_cmd::__aip_cmd_last_result;
-```
-Macros that do not touch globals still see status=0 result="" (no behavior change).
-
----
-
 ## Boot-ready handshake (`cpu_wait` command)
 
 **What it does**
@@ -102,13 +49,13 @@ firmware init completed. Backdoor `uvm_hdl_read` poll — no CPU mailbox protoco
 involved, so it works even before the CPU is responsive to commands.
 
 **Wiring (already in repo)**
-- `firmware/aip_cmd.h`:
+- `firmware/core/aip_cmd.h`:
   ```c
   #define MBOX_BOOT_READY_OFF   0x0800u
   #define MBOX_BOOT_READY_MAGIC 0xDEADBEEFu
   ```
 - `firmware/app/main.c` writes the magic after `cmd_register_*` and before `cmd_loop()`.
-- `aip_cpu_mem/src/aip_cpu_loader.sv::aip_cpu_loader_default::wait_value` —
+- `src/sv/cpu_mem/aip_cpu_loader.sv::aip_cpu_loader_default::wait_value` —
   static task: poll `inst.cpu.read32(addr)` every 100 ns until match or timeout.
 - `aip_core_pkg.sv` registers `cpu_wait` TCL command with defaults:
   - `addr=0x800E_0800`
@@ -129,13 +76,12 @@ involved, so it works even before the CPU is responsive to commands.
 
 Status `0` on success, `-1` on timeout / singleton-not-set.
 
-**NOTE**: result string propagation suffers the same macro bug above. Until
-fixed, status=0 alone is the success signal at the TCL prompt; the full
-result string is visible in SV stdout.
-
 **Prebuilt rebuild required**
-`firmware/prebuilt/rom_boot.{hex,elf}` was generated before the magic write
-was added. To regenerate with boot-ready support:
+`firmware/prebuilt/*.hex` were generated before the magic write was added
+**and** before `AIP_CMD_DATA_MAX` was corrected from 512 to 128 words
+(`firmware/core/aip_cmd.h`). With the old value the C struct placed `rsp_flag`
+at +0x808 while SV polls +0x208, so the stale prebuilt firmware can never
+answer a synchronous command. To regenerate:
 ```bash
 cd firmware && make plic        # (或 poll/msip)
 cp build/plic.{hex,elf,map} prebuilt/
@@ -155,3 +101,130 @@ init step the CPU is stuck at), write progressive values:
 #define STAGE_READY         0xDEADBEEF
 ```
 Probe with `cpu_wait expected=...` per stage. Not implemented yet.
+
+---
+
+## UCLI `run` returns with Tcl code `return` after the bridge `$stop` unless `-debug_access+f`
+
+**Symptom** (simv built without `+f`, e.g. `-debug_access+r` or `+rw`)
+`source aip_cmd.tcl` returns, but nothing after its bridge-start block ran:
+`::_aip_known_cmds` is never built (the `unknown` fast-fail path stays off and
+every unknown command costs one SV round trip before failing) and, when
+`aip_cmd.tcl` is sourced directly rather than through `dist/aip_init.tcl`,
+`aip_checkpoint` / `aip_restore` / `aip_wait_checkpoint` are missing.
+
+**Root cause**
+When `run` (`_vcs_run`) comes back from the bridge's initial `$stop`, UCLI
+returns it to Tcl with completion code 2 (`return`, level 1) instead of 0 —
+the same effect as a `return` statement at that point, which ends the file
+being sourced (the parent file continues) or the enclosing proc.  Measured on
+VCS W-2024.09 with `dist/tests/tcl_ucli_smoke.sv` and
+`catch {_vcs_run} res opts`: `+rw+f` and `+all` give `rc=0`; `+r`, `+rw`,
+`+rw+cbk`, `+rw+pp`, `+rw+dmptf`, `+rw+class`, `+rw+thread` give
+`rc=2 -level 1`.  The `+f` (force) capability is what switches `$stop` to the
+normal-return path.
+
+`+r`/`+rw` builds are not a supported bridge configuration anyway:
+`aip_send_cmd` delivers every command with `force aip_core_pkg::__tcl_cmd_*`,
+which needs `+f`.
+
+**Workaround**
+Build simv with `-debug_access+r+w+f` (`+r` for `get`, `+f` for `force`,
+`+w` for `deposit`-based helpers); `+all` is a superset and also works.
+Checkpointing needs nothing beyond `+r+w+f`: measured on W-2024.09
+(2026-09-10), UCLI `save`/`restore` succeed with `+r+w+f`, `+r` and
+`+simctrl`, and fail only with no `-debug_access` at all
+(`Error-[UCLI-117]`).  Spell the options out: `-debug_access+rwf` is
+accepted by `vcs` but measured as `rc=2` (no force capability).
+`dist/aip_init_so.tcl` is immune to the script truncation (the bridge start
+is isolated in `dist/aip_run.tcl`); `dist/aip_init.tcl` sources
+`aip_checkpoint.tcl` itself, so only the command-table cache is lost there.
+
+---
+
+## VCS UCLI `restore` clears the Tcl command table
+
+**Symptom**
+Everything after `aip_restore` fails with `invalid command name "_aip_sim_time"`
+(or any other `aip_*` / `fv` / `mem_*` command), even though the restore itself
+succeeded and simulation time resumed at the snapshot.
+
+**Root cause**
+Measured on VCS W-2024.09 (2026-09-10) with both the source loader
+(`dist/aip_init.tcl`) and the binary loader (`dist/aip_init_so.tcl`): UCLI
+`restore` restores the simulation state and keeps Tcl **global variables**, but
+every command defined by `source` or `load` is gone.  Execution also does not
+continue past the `restore` inside `aip_restore`, so the confirmation `puts`
+after it never prints; the next line of the `-do` script does run.
+
+Because the globals survive, `::aip_initialized` is still `1` after the restore,
+so simply re-sourcing the loader used to be a silent no-op.
+
+**Workaround (in the repo)**
+Both loaders now treat a missing `aip_send_cmd` as "not initialized", so a
+second `source` after a restore re-loads everything; `dist/aip_init_so.tcl`
+additionally skips the bridge start when the bridge was already running before
+the restore.  User scripts must include that second `source` at file scope:
+
+```tcl
+aip_restore base
+source /path/to/aip_core/dist/aip_init_so.tcl
+run 500ns
+```
+
+After that second `source`, the restored session is fully usable: the command
+table is back, a bridge round trip returns the value the design holds at the
+snapshot (byte-identical to the same call taken before the snapshot), the UCLI
+helpers read the design, `run` advances the simulation, and the session can take
+further snapshots of its own.
+
+One thing the second `source` cannot bring back is anything the *user* script
+defined before the restore — procs are commands too, so a helper proc defined
+above `aip_restore` is gone with the rest. Define them after the restore.
+
+Regression: `make test_checkpoint_restore` (build with `-debug_access+r+w+f`;
+see the note above about `+all`).
+
+---
+
+## VCS UCLI `save` hangs intermittently
+
+**Symptom**
+`aip_checkpoint` (or a bare UCLI `save`) never returns.  The snapshot
+directory holds `<name>.FILES` and `<name>_tmp.save_in_progress` but no
+finished `<name>.vcssave`.  Re-running the same command usually succeeds.
+
+**Measurements** (VCS W-2024.09, host with ASLR on, trivial 2-signal design,
+`save` repeated 5x per configuration, 60 s timeout, 2026-09-10)
+
+| build | ASLR | ok | hung |
+|---|---|---|---|
+| `-debug_access+r+w+f` | on (simv re-execs itself) | 4 | 1 |
+| `-debug_access+r+w+f` | off (`setarch -R`) | 3 | 2 |
+| `-debug_access+all` | on | 3 | 2 |
+| `-debug_access+all` | off (`setarch -R`) | 3 | 2 |
+
+So the hang is independent of `-debug_access` and of the ASLR re-exec that
+VCS performs at startup to enable `$save`.  An earlier note in this file
+attributed a single observed hang to `+all`; that was one sample of a flaky
+failure, not a property of `+all`, and has been corrected.
+
+**Where it hangs**
+A hung `simv` has a single thread parked in `do_wait` (`/proc/<pid>/wchan`)
+with `<name>_tmp.save_in_progress` on disk: UCLI `save` forks a child to write
+the snapshot and blocks in `wait()` for it, and intermittently that child never
+completes.  Nothing on the Tcl or SV side is involved, so nothing in this
+repository can prevent it.
+
+**Workaround**
+Treat snapshot creation as retryable: put a timeout around the step that
+saves and re-run it on timeout.  Both checkpoint regressions do exactly that
+(`CKPT_TIMEOUT`, `CKPT_ATTEMPTS` in the root Makefile), and note that a target
+taking several snapshots compounds the risk: `test_checkpoint_wait_vcs` saves
+four times, so at a per-save hang rate of ~25% it would fail most runs without
+the retry.  Nothing in this repository makes the hang
+more or less likely, and a snapshot that completes is sound — `restore`
+from it behaves identically to the pre-snapshot session (see
+`make test_checkpoint_restore`, which compares a bridge round trip taken
+before the snapshot against the same call after the restore).
+

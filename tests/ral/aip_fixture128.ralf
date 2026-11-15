@@ -1,0 +1,11 @@
+# tests/ral：独立128位构建的真实生成模型；不得用于默认宽度正测。
+# 与64位fixture保持相同层次/地址，模型及UVM package必须一起重编。
+register WIDE { bytes 16; field DATA { bits 128; access rw; reset 0; } }
+memory RAM { size 4; bits 128; access rw; }
+virtual register VIEW {
+  bytes 16;
+  field LODATA { bits 13; access rw; };
+  field HIDATA { bits 115; access rw; };
+}
+block leaf { bytes 4; register WIDE @0; memory RAM @0x100; virtual register VIEW=VIEW[1] RAM @0; }
+system aip_fixture { bytes 4; block leaf=LEAF @0x200; }

@@ -20,7 +20,9 @@
 // ============================================================
 
 #define AIP_CMD_NAME_MAX   32
-#define AIP_CMD_DATA_MAX   512
+/* One 32-bit word per character.  128 words keep rsp_flag at +0x208 exactly
+ * as the SV side (aip_cpu_bridge.sv OFF_* / CMD_DATA_MAX) expects. */
+#define AIP_CMD_DATA_MAX   128
 #define AIP_CMD_MAX        64
 
 // Boot-ready handshake (CPU -> TCL/SV)
