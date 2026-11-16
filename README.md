@@ -525,6 +525,15 @@ endtask
 持续 tick 也会延后前台命令的停滞超时。需要业务级绝对期限时，仍应在用户
 sequence/task 内设置自己的 timeout。
 
+Tcl 等待 ACK 用同一判据：`::aip_ack_timeout_ns`（默认 52000 = 默认 stall 50us + 2×poll 1us）
+是"没有活动进展"的最长时间，只要 tick 计数还在变就一直等到 ACK，长命令拿到的是自己的
+结果而不是上一条的陈旧结果。看门狗启用时 Tcl 至少等 `stall + 2×poll`（从 SV 读取，
+`set_cmd_watchdog` 改阈值后自动跟随），所以总是先收到看门狗的错误结果；看门狗禁用时由
+`::aip_ack_timeout_ns` 兜底，到期打印 `WARN: cmd N no ack after ...ns without activity progress`
+后返回，不会无限等待。要容忍更长的无 tick 静默段就调大它（如 `set ::aip_ack_timeout_ns 5000000`）；
+低于看门狗所需的值不会生效，想更快失败应调小看门狗阈值。pause% 中转入注入队列的普通命令和
+`aip_job wait` 也按无进展计时（见 8.2）。定向验证入口为 `make test_cmd_ack_progress`。
+
 配置与手动控制：
 
 ```systemverilog
@@ -1569,6 +1578,10 @@ resume                          ;# 原生续跑，不重发 sequence、不重放
 - 注入任务与原任务共享仿真时间；调试推进会让 DUT、时钟和原 sequence 一起运行，
   因而可能产生真实业务竞争。注入票据有界（32 个槽），超时只标记任务，运行中
   不强杀 sequence；运行中任务必须自然结束后才能回收。
+- pause% 中的普通命令与正常 ACK 一样不设绝对期限，只在 `::aip_ack_timeout_ns` 内
+  无活动进展时放弃：仍在排队、从未执行的请求被撤销回收并返回 `TIMEOUT` 失败结果，
+  已在运行的报 `AIP_INJECT_TIMEOUT` 并保留 ticket。`aip_job wait` 的 `timeout=` 同样
+  按无进展计时；`aip_submit ... timeout=` 仍是提交后的绝对期限。
 - `aip_watch_cancel $watch_id` 取消尚未命中的观察，重复取消幂等；不带 ID 的
   `aip_watch_cancel` 一次取消全部仍处于 `armed` 状态的观察，并返回被取消的 ID 列表；
   `aip_watch_status $watch_id` 返回 `state/path/expected/value/time` 等状态字段。

@@ -23,7 +23,7 @@ AIP_TEST_INCDIRS := +incdir+../.. +incdir+../../src/sv +incdir+../../src/sv/core
 
 .PHONY: all help test_reg_seq test_user_seq test_soload test_tcl_watchdog test_checkpoint_wait_tcl test_checkpoint_wait_vcs test_checkpoint_restore test_end_checker_registry test_cmdline_negative test_cmdline_container_syntax test_cmdline_print_control test_cmdline_wide test_cmdline_array_random test_cmdline_struct_schema_scalar test_cmdline_struct_schema_containers test_cmdline_struct_schema_typed_postprocess test_cmdline_struct_schema_nested test_cmdline_struct_schema_nested_canonical test_cmdline_struct_schema_final_review test_cmdline_struct_schema_queue test_cmdline_struct_schema_integration test_cmdline_struct_schema_negative test_cmdline_strict_queue test_cmdline_struct_schema_lifecycle test_cmdline_struct_schema_width_fail test_cmdline_struct_schema_primitive_arrays test_cmdline_struct_schema_size_budget test_cmdline_struct_schema test_core_package test_core_package_preinclude test_cpu_bridge test_cseq_arbitration test_c_bridge_socket test_dut_control test_str_delim test_cmd_str_result test_x_watch_vcs clean
 .PHONY: test_cmdline_zero_weight test_cmdline_diagnostics
-.PHONY: test_cmd_wait test_wait_policy test_cmdline_query test_parse_uint_arg
+.PHONY: test_cmd_wait test_cmd_ack_progress test_wait_policy test_cmdline_query test_parse_uint_arg
 .PHONY: test_reg_wide
 .PHONY: test_cmd_result_context
 .PHONY: test_cmd_compat test_checkpoint_background test_checkpoint_cmdline test_cmdline_restore_loader_tcl ci-cmd
@@ -88,6 +88,7 @@ help:
 	@echo "  test_wait_policy (shared wait/timeout policy: multiplier, timeouts, attempt cap, load_params)"
 	@echo "  test_parse_uint_arg (strict unsigned command arguments: default, negative, non-numeric, max)"
 	@echo "  test_cmd_wait (per-command async wait=0 and synchronous default)"
+	@echo "  test_cmd_ack_progress (Tcl ACK wait counts only time without activity progress)"
 	@echo "  test_cmd_result_context (isolated results, legacy compatibility, expired-context rejection)"
 	@echo "  test_cmd_compat (direct SV calls, nested legacy results, raw argument preservation)"
 	@echo "  test_checkpoint_background (save/restore with active local, legacy and UVM workers)"
@@ -324,6 +325,20 @@ test_cmd_wait:
 	    && grep -Eq '^UVM_ERROR[[:space:]]*:[[:space:]]*0[[:space:]]*$$' cmd_wait.log \
 	    && grep -Eq '^UVM_FATAL[[:space:]]*:[[:space:]]*0[[:space:]]*$$' cmd_wait.log \
 	    && ! grep -Eq '^CMD_WAIT_FAIL|^Error-|no ack after' cmd_wait.log
+
+# Tcl ACK 只计无活动进展时间：长命令等到真实结果、watchdog 结果先于 Tcl 放弃、禁用 watchdog 时
+# 按预算放弃（全日志恰一条告警）、快命令时序不变。
+test_cmd_ack_progress:
+	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps \
+	    -debug_access+r+w+f -full64 -lca $(AIP_TEST_INCDIRS) -top test_cmd_ack_progress \
+	    -o simv_cmd_ack_progress -Mdir=csrc_cmd_ack_progress test_cmd_ack_progress.sv
+	cd $(TEST_SV_DIR) && timeout 300s ./simv_cmd_ack_progress -no_save -ucli \
+	    -do ../tcl/test_cmd_ack_progress.tcl > cmd_ack_progress.log 2>&1 \
+	    || { cat cmd_ack_progress.log; exit 1; }
+	cd $(TEST_SV_DIR) && cat cmd_ack_progress.log \
+	    && grep -Eq '^CMD_ACK_PROGRESS_PASS checks=[0-9]+$$' cmd_ack_progress.log \
+	    && test "$$(grep -c 'no ack after' cmd_ack_progress.log)" -eq 1 \
+	    && ! grep -Eq '^CMD_ACK_PROGRESS_FAIL|^Error-' cmd_ack_progress.log
 
 # 通用等待策略：倍率/饱和、poll/事件超时、次数上限、自行轮询与 load_params；纯 SV，无需 DPI 库。
 test_wait_policy:
@@ -1386,6 +1401,8 @@ clean:
 	rm -rf $(TEST_SV_DIR)/simv_user_seq $(TEST_SV_DIR)/simv_user_seq.daidir $(TEST_SV_DIR)/csrc_user_seq
 	rm -rf $(TEST_SV_DIR)/simv_cmd_wait $(TEST_SV_DIR)/simv_cmd_wait.daidir $(TEST_SV_DIR)/csrc_cmd_wait
 	rm -f $(TEST_SV_DIR)/cmd_wait.log
+	rm -rf $(TEST_SV_DIR)/simv_cmd_ack_progress $(TEST_SV_DIR)/simv_cmd_ack_progress.daidir $(TEST_SV_DIR)/csrc_cmd_ack_progress
+	rm -f $(TEST_SV_DIR)/cmd_ack_progress.log
 	rm -rf $(TEST_SV_DIR)/simv_cmd_result_context $(TEST_SV_DIR)/simv_cmd_result_context.daidir $(TEST_SV_DIR)/csrc_cmd_result_context
 	rm -f $(TEST_SV_DIR)/cmd_result_context*.log
 	rm -rf $(TEST_SV_DIR)/simv_cmd_compat $(TEST_SV_DIR)/simv_cmd_compat.daidir $(TEST_SV_DIR)/csrc_cmd_compat
@@ -1445,6 +1462,6 @@ ci-regress:
 # 保留各单项目标便于本地定向验证；make ci也会经ci-regress运行这组门禁。
 ci-cmd:
 	$(MAKE) test_inject_queue
-	$(MAKE) test_cmd_str_result test_cmd_result_context test_cmd_compat test_cmd_wait
+	$(MAKE) test_cmd_str_result test_cmd_result_context test_cmd_compat test_cmd_wait test_cmd_ack_progress
 	$(MAKE) test_dut_control test_c_bridge_socket test_user_seq test_tcl_watchdog test_cseq_arbitration
 	$(MAKE) test_checkpoint_background

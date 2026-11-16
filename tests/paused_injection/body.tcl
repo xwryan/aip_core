@@ -172,6 +172,15 @@ proc pi_finish_jobs {} {
     pi_check trigger_drained [expr {[aip_parse_int [get aip_core_pkg::__tcl_cmd_trigger]] == 0}]
     pi_check outer_still_frozen [expr {$::pi_returned == 0 && $::pi_suffix == 0}]
     foreach ticket [list $::pi_first $::pi_second $::pi_foreign] { aip_job release $ticket }
+    # 暂停中的普通命令与 ACK 同样按无进展等待：持续 tick、远超默认预算的长命令拿到真实结果。
+    # manual 组的原 run 有绝对截止点，不再额外推进。
+    if {$::pi_mode eq "watch"} {
+        set poll $::aip_inject_poll_ns
+        set ::aip_inject_poll_ns 1000
+        cw_typed ns=150000 tick=1 tag=LONG
+        set ::aip_inject_poll_ns $poll
+        pi_check long_progress_result [expr {[aip_read_result] eq "DONE:cw_typed:LONG" && [aip_check_status] == 0}]
+    }
     set ::pi_before_resume [pi_now]
     puts AIP_INJECTION_JOBS_DONE
 }

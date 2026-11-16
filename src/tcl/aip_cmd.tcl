@@ -123,9 +123,23 @@ proc _aip_sim_time {} {
 # 命令回显开关，用户可 set ::aip_echo 0 关闭。
 if {![info exists ::aip_echo]} { set ::aip_echo 1 }
 
-# ACK 等待上限（ns，默认 50us）；长命令可在脚本中调大，如 set ::aip_ack_timeout_ns 5000000。
-if {![info exists ::aip_ack_timeout_ns]} { set ::aip_ack_timeout_ns 50000 }
+# ACK 等待的无进展上限（ns）：只计 aip_activity 计数不变的仿真时间，持续有进展的命令一直等到 ACK。
+# 默认 52000 = SV watchdog 默认 stall 50000 + 2×poll 1000；需容忍更长的静默段可调大，如 set ::aip_ack_timeout_ns 5000000。
+if {![info exists ::aip_ack_timeout_ns]} { set ::aip_ack_timeout_ns 52000 }
 if {![info exists ::_aip_cmd_seq]} { set ::_aip_cmd_seq 0 }
+
+# 本次 ACK 的无进展预算（fs）：SV watchdog 启用时不低于 SV 发布的 stall+2×poll，保证其强杀结果先于
+# Tcl 放弃到达；watchdog 禁用或旧 SV 未发布配置时即 ::aip_ack_timeout_ns，等待始终有界。
+proc _aip_ack_budget_fs {} {
+    set budget [_aip_control_time_fs "${::aip_ack_timeout_ns}ns"]
+    if {![catch {
+        set stall [_aip_control_scalar [get aip_core_pkg::__tcl_cmd_watchdog_stall_ns]]
+        set poll [_aip_control_scalar [get aip_core_pkg::__tcl_cmd_watchdog_poll_ns]]
+    }] && $stall > 0} {
+        set budget [expr {max($budget, ($stall + 2 * $poll) * 1000000)}]
+    }
+    return $budget
+}
 
 # run 推进中的标记：被异常打断时残留为 1，供 settle 区分被打断的 run 与被打断的命令。
 if {![info exists ::_aip_interrupted_run]} { set ::_aip_interrupted_run 0 }
@@ -188,17 +202,27 @@ proc aip_send_cmd {cmd_str} {
         force aip_core_pkg::__tcl_cmd_id 32'd$my_id
         force aip_core_pkg::__tcl_cmd_trigger 1
 
-        # 期限在首次推进前固定：watch 暂停期间的调试推进也计入，resume 不追加重试窗口。
-        # 每轮先查 ACK，过期但已完成仍取真实结果；收到 ACK 即退出并清 trigger，
-        # 不能把其 $stop 当普通断点继续推进。
-        set ack_deadline [expr {[_aip_control_now_fs]+[_aip_control_time_fs "${::aip_ack_timeout_ns}ns"]}]
+        # 只有无进展的仿真时间计入预算（watch 暂停期间的调试推进同样计入）：活动计数一变即重新计时。
+        # 每轮先查 ACK，预算耗尽的同一时刻已完成仍取真实结果；收到 ACK 即退出并清 trigger，
+        # 不能把其 $stop 当普通断点继续推进。进展基准在首次推进后才取：零耗时命令不多读寄存器，
+        # 起点偏晚只会多等（至多一步）。
+        set budget [_aip_control_time_fs "${::aip_ack_timeout_ns}ns"]
+        set idle 0
         set acked 0
+        set advanced 0
         while {1} {
             set ack_id [aip_parse_int [get aip_core_pkg::__tcl_result_id]]
             if {$ack_id == $my_id} { set acked 1; break }
-            set remaining [expr {$ack_deadline-[_aip_control_now_fs]}]
-            if {$remaining <= 0} { break }
-            _aip_advance ack "[expr {min($remaining,100000000)}]fs"
+            if {$advanced} { set idle [_aip_control_idle_fs progress] }
+            if {$idle >= $budget} {
+                # 放弃前计入 SV watchdog 的下限（受理命令时 SV 已重发其配置）。
+                set budget [_aip_ack_budget_fs]
+                if {$idle >= $budget} { break }
+            }
+            # 步长取预算的 1/8：ACK 的 $stop 会提前结束推进，步长只决定发现空闲的迟滞（不超过 1/8 预算）
+            # 与长命令的往返次数（每个预算 8 次）。
+            _aip_advance ack "[expr {min($budget - $idle, max(1, $budget / 8))}]fs"
+            set advanced 1
         }
         force aip_core_pkg::__tcl_cmd_trigger 0
         force aip_core_pkg::__tcl_cmd_len 32'd0
@@ -207,7 +231,7 @@ proc aip_send_cmd {cmd_str} {
     if {$send_code} { return -options $send_options $send_result }
 
     if {!$acked} {
-        puts "\033\[31m\[AIP_TCL_BRIDGE\] WARN: cmd $my_id no ack after ${::aip_ack_timeout_ns}ns. result 可能陈旧.\033\[0m"
+        puts "\033\[31m\[AIP_TCL_BRIDGE\] WARN: cmd $my_id no ack after [expr {$budget / 1000000}]ns without activity progress. result 可能陈旧.\033\[0m"
     }
 
     if {$::aip_echo} {

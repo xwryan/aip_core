@@ -40,13 +40,19 @@ reg [31:0] __tcl_result_id = 0;
 reg [31:0] __tcl_cmd_names_ascii [0:4095];
 reg [31:0] __tcl_cmd_names_len = 0;
 
-// 全局活动计数：monitor/scoreboard/driver 调 tick() 表示有进展，供 end_test idle 检测与命令停滞 watchdog 使用。
+// Tcl 只读镜像：ACK 等待只计活动计数不变的时间，且不早于命令停滞 watchdog 放弃（禁用时 stall=0）。
+reg [31:0] __tcl_activity_count = 0;
+reg [63:0] __tcl_cmd_watchdog_stall_ns = 50000;
+reg [63:0] __tcl_cmd_watchdog_poll_ns = 1000;
+
+// 全局活动计数：monitor/scoreboard/driver 调 tick() 表示有进展，供 end_test idle 检测、命令停滞 watchdog 与 Tcl ACK 等待使用。
 class aip_activity;
     static int unsigned count = 0;
 
     // 只表示业务进展，不代表命令完成。
     static function void tick();
         count = count + 1;
+        __tcl_activity_count = count;
     endfunction
 
     static function int unsigned get_count();
@@ -162,11 +168,20 @@ class aip_tcl_bridge;
         end_checker = checker;
     endfunction
 
-    // 设命令停滞看门狗阈值 (ns). 0=禁用. 建议 < TCL 侧 aip_ack_timeout_ns
-    // (默认 50us) 才能让被杀命令在 TCL 放弃前干净返回 error result.
+    // 设命令停滞看门狗阈值 (ns). 0=禁用. Tcl 的 ACK 等待至少持续 stall+2×poll 无进展，
+    // 被杀命令总能先返回 error result.
     static function void set_cmd_watchdog(real stall_ns);
         cmd_watchdog_stall_ns = stall_ns;
+        publish_watchdog();
         `aip_info(("[AIP_TCL_BRIDGE] Cmd watchdog stall timeout = %.0f ns", stall_ns));
+    endfunction
+
+    // 向 Tcl 发布生效的 watchdog 配置（向上取整 ns）；静态量可被直接赋值，故每条命令受理时也重发。
+    static function void publish_watchdog();
+        __tcl_cmd_watchdog_stall_ns = (cmd_watchdog_stall_ns > 0.0) ?
+                                      longint'($ceil(cmd_watchdog_stall_ns)) : 0;
+        __tcl_cmd_watchdog_poll_ns = (cmd_watchdog_poll_ns > 0.0) ?
+                                     longint'($ceil(cmd_watchdog_poll_ns)) : 0;
     endfunction
 
     static function void set_watchdog_hook(aip_cmd_watchdog_hook h);
@@ -191,6 +206,7 @@ class aip_tcl_bridge;
         __tcl_exit = 0;
         idle_count = 0;
         aip_inject_bridge::start();
+        publish_watchdog();
 
         `aip_info(("[AIP_TCL_BRIDGE] Started, waiting for commands..."));
 
@@ -248,6 +264,7 @@ class aip_tcl_bridge;
                 string __wd_snapshot;
 
                 __tcl_bridge_idle = 0;
+                publish_watchdog();
                 result = "";
                 command_status = 0;
                 __wd_scope = new();

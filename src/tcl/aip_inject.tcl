@@ -164,14 +164,14 @@ proc _aip_inject_status {ticket} {
     _aip_inject_error STALE "unknown or released ticket $ticket"
 }
 
-# 等待业务完成（或只等开始），只推进仿真而不resume原脚本。等待期限独立
-# 于SV job期限；到期返回错误但不kill。出错文本带ticket供后续查询与回收。
+# 等待业务完成（或只等开始），只推进仿真而不resume原脚本。等待期限独立于SV job期限，与普通命令
+# ACK 相同只计无活动进展的时间；到期返回错误但不kill。出错文本带ticket供后续查询与回收。
 proc _aip_inject_wait {ticket until_started options} {
     set timeout [_aip_inject_timeout_ns $options $::aip_ack_timeout_ns]
     if {$timeout == 0} { _aip_inject_error ARGUMENT "wait timeout must be positive" }
     set poll [_aip_control_time_fs "${::aip_inject_poll_ns}ns"]
     if {$poll <= 0} { _aip_inject_error ARGUMENT "aip_inject_poll_ns must be positive" }
-    set deadline [expr {[_aip_control_now_fs]+$timeout*1000000}]
+    set budget [expr {$timeout*1000000}]
     while {1} {
         set result [_aip_inject_status $ticket]
         set state [dict get $result state]
@@ -179,9 +179,11 @@ proc _aip_inject_wait {ticket until_started options} {
         if {$state eq "RUNNING_TIMEOUT"} {
             _aip_inject_error TIMEOUT "ticket $ticket exceeded its job deadline; original task is still running (not killed)"
         }
-        set remaining [expr {$deadline-[_aip_control_now_fs]}]
-        if {$remaining <= 0} { _aip_inject_error TIMEOUT "wait expired for ticket $ticket; job remains $state, inspect aip_job status $ticket" }
-        _aip_inject_step "[expr {min($remaining,$poll)}]fs"
+        set idle [_aip_control_idle_fs progress]
+        if {$idle >= $budget} {
+            _aip_inject_error TIMEOUT "no activity progress for ${timeout}ns while waiting for ticket $ticket; job remains $state, inspect aip_job status $ticket"
+        }
+        _aip_inject_step "[expr {min($budget-$idle,$poll)}]fs"
     }
 }
 
@@ -226,12 +228,21 @@ proc _aip_inject_send {command} {
     set ::_aip_inject_last_result {}
     # op4在SV复用extract_wait，原始参数串不在Tcl分词重组；保留逗号、容器、
     # 空白等旧宏可见字节，并统一重复/非法wait的诊断与supports_async检查。
+    # 不设 SV 绝对期限：与普通命令 ACK 一样只受无进展等待约束，持续进展的长命令不被截断。
     set timeout [_aip_inject_timeout_ns {} $::aip_ack_timeout_ns]
-    set accepted [_aip_inject_request 4 $command 0 $timeout]
+    set accepted [_aip_inject_request 4 $command 0 0]
     set ticket [dict get $accepted ticket]
     set wait [dict get $accepted wait]
-    set snapshot [_aip_inject_wait $ticket [expr {!$wait}] {}]
-    if {!$wait && [dict get $snapshot state] in {RUNNING DONE}} {
+    if {[catch {_aip_inject_wait $ticket [expr {!$wait}] {}} snapshot options]} {
+        # 放弃时仍在排队的同步命令从未执行：撤销回收并按失败结果返回，不留待之后悄悄执行。
+        if {!$wait || [dict get $options -errorcode] ne {AIP INJECT TIMEOUT} ||
+            [catch {dict get [_aip_inject_status $ticket] state} state] || $state ne "QUEUED"} {
+            return -options $options $snapshot
+        }
+        _aip_inject_request 2 {} $ticket 0
+        set snapshot [aip_job release $ticket]
+        dict set snapshot result "TIMEOUT: no activity progress for ${timeout}ns while queued; request cancelled"
+    } elseif {!$wait && [dict get $snapshot state] in {RUNNING DONE}} {
         regexp {^\s*(\S+)} $command -> name
         dict set snapshot result "STARTED: $name ticket=$ticket"
         dict set snapshot status 0

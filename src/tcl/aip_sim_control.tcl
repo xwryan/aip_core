@@ -262,6 +262,32 @@ proc _aip_control_ack_complete {} {
     return [expr {[_aip_control_scalar [get aip_core_pkg::__tcl_result_id]] == $pending}]
 }
 
+# SV aip_activity::tick() 的计数镜像；旧 SV 无此寄存器或值非法时返回空串。
+proc _aip_control_activity {} {
+    if {[catch {_aip_control_scalar [get aip_core_pkg::__tcl_activity_count]} count]} { return {} }
+    return $count
+}
+
+# 等待的无进展计时：首次调用记下计数与时刻，之后计数一变就把起点移到当前时刻；返回距最近一次
+# 观测到进展的 fs。起点晚于真实进展，故只会多等不会早放弃；计数不可读时退化为自首次调用起的固定期限。
+proc _aip_control_idle_fs {progress_var} {
+    upvar 1 $progress_var progress
+    set now [_aip_control_now_fs]
+    if {![info exists progress]} {
+        set progress [list [_aip_control_activity] $now]
+        return 0
+    }
+    lassign $progress count since
+    if {$count ne ""} {
+        set current [_aip_control_activity]
+        if {$current ne "" && $current != $count} {
+            set progress [list $current $now]
+            return 0
+        }
+    }
+    return [expr {$now - $since}]
+}
+
 # 自动 -keep 只用于确有交互终端且 VCS 支持该选项的会话：batch 下 native -keep 遇 SIGINT+EOF 会自行续跑，
 # 改变旧中断语义。显式 -keep 始终尊重；检测只用已有 stdin，不打开 /dev/tty、不消费用户输入。
 proc _aip_control_detect_keep_support {} {

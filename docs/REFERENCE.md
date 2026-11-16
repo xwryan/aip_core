@@ -707,6 +707,8 @@ endmodule
 - `aip_core_pkg::__tcl_result_len` — 结果长度
 - `aip_core_pkg::__tcl_result_status` — 命令返回状态；它与“命令是否存在”相互独立
 - `aip_core_pkg::__tcl_result_known` — `1` 表示命令由 SV registry/内建 `fork` 识别；`0` 表示未找到
+- `aip_core_pkg::__tcl_activity_count` — `aip_activity::tick()` 计数的只读镜像，Tcl ACK 等待据此判断进展
+- `aip_core_pkg::__tcl_cmd_watchdog_stall_ns` / `__tcl_cmd_watchdog_poll_ns` — 生效的停滞看门狗配置（ns，禁用时 stall=0），每条命令受理时重发
 
 这些对象属于 `aip_core_pkg`。随库提供的 `aip_cmd.tcl` 和 `aip_checkpoint.tcl` 已在
 内部对相关 UCLI `get`/`force` 使用 `aip_core_pkg::__tcl_*` 限定名。
@@ -729,6 +731,13 @@ endmodule
 不会再转成 `invalid command name`。只有 `__tcl_result_known=0` 才继续尝试原生 Tcl/UCLI 命令。
 
 关键：判据是"**多久没进展**"，而不是"**跑了多久**"。这样正常长命令不会因为耗时长被误杀，只有真正卡死（零进展）才被杀。
+
+**Tcl 侧 ACK 等待用同一判据**：`aip_send_cmd` 只把活动计数（`__tcl_activity_count`）不变的仿真时间计入
+`::aip_ack_timeout_ns`（默认 52000 ns），计数一变就重新计时，持续推进直到 ACK；每步推进预算的 1/8，
+ACK 的 `$stop` 会提前结束推进。看门狗启用时预算至少为 SV 发布的 `stall + 2×poll`，被杀命令的 error
+result 总先于 Tcl 放弃到达；看门狗禁用时由 `::aip_ack_timeout_ns` 兜底，到期告警
+`no ack after ...ns without activity progress` 后返回。暂停中改走注入队列的普通命令和 `aip_job wait`
+采用同样的无进展计时。
 
 **`aip_activity::tick()` 的角色 —— 与看门狗互补**：
 
@@ -775,8 +784,7 @@ endtask
 // SV 侧
 aip_tcl_bridge::set_cmd_watchdog(100000);   // 改 stall 阈值为 100us
 aip_tcl_bridge::set_cmd_watchdog(0);        // 禁用看门狗（裸执行，向后兼容）
-// 建议 stall 阈值 < TCL 侧 aip_ack_timeout_ns（默认 50us），
-// 才能让被杀命令在 TCL 放弃前干净返回 error result
+// Tcl 的 ACK 等待自动不短于 stall+2×poll，无需再手工让 aip_ack_timeout_ns 大于 stall 阈值
 ```
 
 ```tcl
@@ -2242,7 +2250,9 @@ VCS 把脚本直接留在 UCLI 提示符。若 `VCS_HOME` 路径包含 Q/P-20xx�
 暂停时普通已注册命令通过独立注入队列受理；同一注册绑定 FIFO、不同绑定并行，
 每笔返回独立 ticket/结果，不改写原 bridge 槽。使用 `aip_submit` 和
 `aip_job status|wait|cancel|release` 管理 ticket；队列容量为32，运行中超时不
-杀任务，只有终态才能 release。checkpoint/restore、参数全局修改及插件生命周期
+杀任务，只有终态才能 release。暂停中的普通命令不设绝对期限，与 ACK 一样按无活动进展
+等待（见 7b），放弃时仍排队的请求被撤销回收；`aip_job wait` 同样按无进展计时，
+`aip_submit timeout=` 仍是绝对期限。checkpoint/restore、参数全局修改及插件生命周期
 命令仍要求无活动 ticket。注入推进会同步推进原任务和DUT，不能用它消除业务资源竞争。
 `run`/helper 在保留暂停中只接受有限时间，并复用同一安全推进器。
 托管 watch 暂停没有等到真实 `resume` 而因 EOF 返回时，报
