@@ -35,6 +35,7 @@
 |---|---|
 | 仿真器 | VCS Q-2020.03 及以上（W-2024.09 已验证） |
 | include | `+incdir+<aip_core> +incdir+<aip_core>/src/sv` |
+| filelist | 工程 filelist 直接用 `-f $AIP_CORE_ROOT/aip_core.f`（`AIP_CORE_ROOT` 为仓库根，只含 incdir 与统一入口），放在所有依赖 AIP 的 filelist 之前 |
 | timescale | 必须 `-timescale=1ns/1ps`，否则 `aip_time` / `aip_clk` 延迟为零、时钟死循环 |
 | debug access | 标准集成建议 `-debug_access+r+w+f+wn`；其中 Tcl bridge/快照本身只需 `+r+w+f`，`+wn` 用于 `fv`/`dut_deposit` 写 DUT `wire/net`。各 capability 必须用 `+` 分隔，**`+rwf` 连写无效**；完整选择方法见[第 15 节](#15-vcs-debug-access-能力图与选项速查) |
 | 入口顺序 | `` `include "aip_core_pkg.sv" `` 必须是每个 compilation unit 里**第一个** AIP 文件 |
@@ -99,6 +100,7 @@ endmodule
 ```bash
 vcs -sverilog -ntb_opts uvm -full64 -timescale=1ns/1ps -debug_access+r+w+f+wn \
     +incdir+<aip_core> +incdir+<aip_core>/src/sv tb.sv -o simv
+# filelist 写法等价：export AIP_CORE_ROOT=<aip_core>，用 -f $AIP_CORE_ROOT/aip_core.f 代替两个 +incdir+
 
 ./simv -ucli -do test.tcl +UVM_NO_RELNOTES     # 批处理：脚本跑完退出
 ./simv -ucli -i  test.tcl +UVM_NO_RELNOTES     # 交互：脚本跑完停在 ucli% 继续手敲

@@ -1,6 +1,14 @@
-# Linux x86-64 binary distribution build (dist/lib, dist/bin, dist/include); override ROOT, CC, PYTHON,
-# CFLAGS, LDFLAGS and library variables elsewhere. All Tcl sources are embedded into one .so.
-# C 产物须保持 C ABI，socket 返回缓冲依赖 C11 TLS，故显式指定 GNU C11（避免编译器包装器默认按 C++ 编译）。
+# dist：Linux x86-64 分发构建入口，依赖 C 编译器、Python 和 readline。
+# 本文件管理生成头文件、共享库和客户端的构建及清理；运行时资源仍由宿主与各库管理。
+# Tcl 实现全部按依赖顺序内嵌到同一个 .so，修改任一依赖源文件都会触发重建。
+# 四个 C 产物必须保持 C ABI；socket 返回值缓冲区由调用线程持有，依赖 C11 TLS。
+# 因此构建显式指定 GNU C11，避免编译器包装器默认使用 C++ 时改变导出符号或拒绝 _Thread_local。
+# Build the Linux x86-64 AIP binary distribution.
+#
+# The repository still contains all source files.  This Makefile additionally
+# produces runtime artifacts under dist/lib, dist/bin and dist/include.
+# Override ROOT, CC, PYTHON, CFLAGS, LDFLAGS and library variables on another
+# system.  No compiler, Tcl installation or VCS installation is hard-coded.
 
 # Resolve paths from this Makefile rather than the caller's current directory,
 # so both `make -C dist` and `make -f dist/Makefile` behave identically.
@@ -11,7 +19,9 @@ DIST_DIR    ?= $(MAKEFILE_DIR)
 DIST_DIR    := $(abspath $(DIST_DIR))
 ROOT        ?= $(abspath $(DIST_DIR)/..)
 
-# GNU make's built-in CC=cc: default to gcc only when the caller did not set CC (overrides stay authoritative).
+# GNU make ships a built-in CC=cc.  Select gcc as the Linux default only when
+# the caller did not provide CC; command-line/environment overrides remain
+# authoritative.  Set CC=clang (or another compiler) when rebuilding elsewhere.
 ifeq ($(origin CC),default)
 CC          := gcc
 endif
@@ -23,8 +33,12 @@ LDFLAGS     ?=
 PICFLAGS    ?= -fPIC
 SHARED      ?= -shared
 PKG_CONFIG  ?= pkg-config
-# No Tcl headers/runtime: the wrapper dlsym()s the UCLI API (mhpi_ucliTclExecNoPrint); linking a second
-# Tcl runtime into a VCS extension can corrupt the host interpreter's allocator, so only libdl is needed.
+# Tcl is provided by the hosting UCLI/VCS process.  The wrapper needs no Tcl
+# headers: it resolves the UCLI API (mhpi_ucliTclExecNoPrint) with dlsym, so a
+# second Tcl runtime is never linked into the extension.  Only libdl is needed:
+# linking another Tcl runtime into a VCS extension can corrupt the host
+# interpreter's allocator.  Override this explicitly only when the embedding
+# host requires additional loader libraries.
 TCL_BRIDGE_LIBS ?= -ldl
 READLINE_CFLAGS ?= $(shell $(PKG_CONFIG) --cflags readline 2>/dev/null || true)
 READLINE_LIBS ?= $(shell $(PKG_CONFIG) --libs readline 2>/dev/null || printf '%s' '-lreadline -lhistory')
@@ -32,8 +46,9 @@ LDLIBS_SOLOAD ?= -ldl
 LDLIBS_SOCKET ?= -ldl -pthread
 LDLIBS_CLIENT ?= $(READLINE_LIBS)
 
-# Deliberately Linux x86-64 only: a clear platform error beats an incompatible .so. Override HOST_ARCH
-# only for a cross-toolchain known to emit x86-64 binaries.
+# The first supported target is deliberately Linux x86-64.  A clear platform
+# error is preferable to producing an incompatible .so by accident.  Override
+# HOST_ARCH only for a cross-toolchain that is known to emit x86-64 binaries.
 TARGET_ARCH ?= x86_64
 HOST_ARCH   ?= $(shell uname -m 2>/dev/null || printf '%s' unknown)
 
@@ -98,8 +113,9 @@ $(LIB_DIR) $(BIN_DIR) $(INCLUDE_DIR) $(GEN_DIR):
 $(TCL_PAYLOAD): $(TCL_SOURCES) $(ROOT)/packaging/scripts/embed_tcl.py | $(GEN_DIR)
 	$(PYTHON) $(ROOT)/packaging/scripts/embed_tcl.py $@ $(TCL_SOURCES)
 
-# 构建文件本身是依赖（语言模式变化会重建）；在调用者选项之后把每个源码限定为 GNU C11，
-# 源码后立即恢复按后缀识别语言，避免额外链接的 .o/归档被当作 C 源码。
+# 将本构建文件列为普通依赖，拉取语言模式修复后自动重建已有产物。
+# 在调用者的编译/链接选项之后限定每个源码为 GNU C11，保留工具链和其他选项的可配置性。
+# 源码后立即恢复按后缀识别语言，避免额外链接的 .o 或归档被当作 C 源码解析。
 $(LIB_DIR)/libaip_tcl_bridge.so: $(ROOT)/packaging/aip_tcl_bridge.c $(TCL_PAYLOAD) $(DIST_BUILD_MAKEFILE) | $(LIB_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(PICFLAGS) $(LDFLAGS) $(SHARED) \
 		-I$(GEN_DIR) -o $@ -x c -std=gnu11 $(ROOT)/packaging/aip_tcl_bridge.c -x none $(TCL_BRIDGE_LIBS)
