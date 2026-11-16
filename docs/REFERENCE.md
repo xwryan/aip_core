@@ -628,6 +628,12 @@ warning。每次运行时调用 `configure` 或 `set_cmdline_print` 都会清空
 // real ns = aip_cmd::parse_time_ns("500ns");  // → 500.0
 // real ns = aip_cmd::parse_time_ns("100ps");  // → 0.1
 
+// --- 严格无符号参数解析（SV 内部可用）---
+// 空串取默认值；负数、非整数字面量或超过 max 返回 0 并给出原因（parse_int64_arg 则静默回落默认值）。
+// longint unsigned qid; string why;
+// if (!aip_cmd::parse_uint_arg(aip_cmd::get_arg(h.args_in, "qid"), 32'hffff_ffff, 0, qid, why, "qid"))
+//     h.result_out = why;  // 例如 "qid=-1: negative value; expected an unsigned integer literal"
+
 // --- 运行时参数 override（动态改 trans 参数，不重编译不重启）---
 // SV 侧：
 aip_cmdline_override::set_val("axi.wr.addr", "0x2000");

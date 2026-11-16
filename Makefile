@@ -23,7 +23,7 @@ AIP_TEST_INCDIRS := +incdir+../.. +incdir+../../src/sv +incdir+../../src/sv/core
 
 .PHONY: all help test_reg_seq test_user_seq test_soload test_tcl_watchdog test_checkpoint_wait_tcl test_checkpoint_wait_vcs test_checkpoint_restore test_end_checker_registry test_cmdline_negative test_cmdline_container_syntax test_cmdline_print_control test_cmdline_wide test_cmdline_array_random test_cmdline_struct_schema_scalar test_cmdline_struct_schema_containers test_cmdline_struct_schema_typed_postprocess test_cmdline_struct_schema_nested test_cmdline_struct_schema_nested_canonical test_cmdline_struct_schema_final_review test_cmdline_struct_schema_queue test_cmdline_struct_schema_integration test_cmdline_struct_schema_negative test_cmdline_strict_queue test_cmdline_struct_schema_lifecycle test_cmdline_struct_schema_width_fail test_cmdline_struct_schema_primitive_arrays test_cmdline_struct_schema_size_budget test_cmdline_struct_schema test_core_package test_core_package_preinclude test_cpu_bridge test_cseq_arbitration test_c_bridge_socket test_dut_control test_str_delim test_cmd_str_result test_x_watch_vcs clean
 .PHONY: test_cmdline_zero_weight test_cmdline_diagnostics
-.PHONY: test_cmd_wait test_wait_policy test_cmdline_query
+.PHONY: test_cmd_wait test_wait_policy test_cmdline_query test_parse_uint_arg
 .PHONY: test_reg_wide
 .PHONY: test_cmd_result_context
 .PHONY: test_cmd_compat test_checkpoint_background test_checkpoint_cmdline test_cmdline_restore_loader_tcl ci-cmd
@@ -86,6 +86,7 @@ help:
 	@echo "SV regression targets (VCS on PATH): test_core_package test_core_package_preinclude"
 	@echo "  test_cpu_bridge test_reg_seq test_reg_wide test_user_seq test_soload test_tcl_watchdog test_checkpoint_wait_vcs"
 	@echo "  test_wait_policy (shared wait/timeout policy: multiplier, timeouts, attempt cap, load_params)"
+	@echo "  test_parse_uint_arg (strict unsigned command arguments: default, negative, non-numeric, max)"
 	@echo "  test_cmd_wait (per-command async wait=0 and synchronous default)"
 	@echo "  test_cmd_result_context (isolated results, legacy compatibility, expired-context rejection)"
 	@echo "  test_cmd_compat (direct SV calls, nested legacy results, raw argument preservation)"
@@ -337,6 +338,12 @@ test_cmdline_query:
 	cd $(TEST_SV_DIR) && grep -E '^TCQ_|TEST_CMDLINE_QUERY' cmdline_query.log && grep -q TEST_CMDLINE_QUERY_PASS cmdline_query.log
 	cd $(TEST_SV_DIR) && { ./simv_cmdline_query +tcq_neg +q.neg=-3 > cmdline_query_neg.log 2>&1 || true; }
 	cd $(TEST_SV_DIR) && grep -q 'requires an unsigned value' cmdline_query_neg.log && ! grep -q TCQ_FAIL cmdline_query_neg.log && echo 'TCQ_OK:   negative unsigned input is a hard fatal'
+
+# aip_cmd::parse_uint_arg 严格无符号解析；同时核对 parse_int64_arg 的旧行为不变。
+test_parse_uint_arg:
+	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_parse_uint_arg -o simv_parse_uint_arg -Mdir=csrc_parse_uint_arg test_parse_uint_arg.sv
+	cd $(TEST_SV_DIR) && ./simv_parse_uint_arg > parse_uint_arg.log 2>&1 || { cat parse_uint_arg.log; exit 1; }
+	cd $(TEST_SV_DIR) && grep -E '^TPU_|TEST_PARSE_UINT_ARG|^UVM_(ERROR|FATAL) *:' parse_uint_arg.log && grep -q TEST_PARSE_UINT_ARG_PASS parse_uint_arg.log && ! grep -q TPU_FAIL parse_uint_arg.log
 
 # Signed integer command-line parsing regression — requires VCS on PATH
 test_cmdline_negative:
@@ -1398,6 +1405,7 @@ clean:
 	rm -f $(TEST_SV_DIR)/dut_control.hex $(TEST_SV_DIR)/dut_control.bin $(TEST_SV_DIR)/dut_control_bad.hex $(TEST_SV_DIR)/dut_control_width.hex $(TEST_SV_DIR)/dut_control_width.bin $(TEST_SV_DIR)/dut_control_overflow.hex
 	rm -rf $(TEST_SV_DIR)/simv_str_delim $(TEST_SV_DIR)/simv_str_delim.daidir $(TEST_SV_DIR)/csrc_str_delim $(TEST_SV_DIR)/str_delim.log
 	rm -rf $(TEST_SV_DIR)/simv_cmd_str_result $(TEST_SV_DIR)/simv_cmd_str_result.daidir $(TEST_SV_DIR)/csrc_cmd_str_result $(TEST_SV_DIR)/cmd_str_result.log
+	rm -rf $(TEST_SV_DIR)/simv_parse_uint_arg $(TEST_SV_DIR)/simv_parse_uint_arg.daidir $(TEST_SV_DIR)/csrc_parse_uint_arg $(TEST_SV_DIR)/parse_uint_arg.log
 	rm -rf $(TEST_SV_DIR)/simv_cmdline_negative $(TEST_SV_DIR)/simv_cmdline_negative.daidir $(TEST_SV_DIR)/csrc_cmdline_negative $(TEST_SV_DIR)/cmdline_negative.log
 	rm -rf $(TEST_SV_DIR)/simv_cmdline_zero_weight $(TEST_SV_DIR)/simv_cmdline_zero_weight.daidir $(TEST_SV_DIR)/csrc_cmdline_zero_weight $(TEST_SV_DIR)/cmdline_zero_weight*.log
 	rm -rf $(TEST_SV_DIR)/simv_cmdline_diagnostics $(TEST_SV_DIR)/simv_cmdline_diagnostics.daidir $(TEST_SV_DIR)/csrc_cmdline_diagnostics $(TEST_SV_DIR)/cmdline_diagnostics*.log

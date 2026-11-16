@@ -508,6 +508,35 @@ class aip_cmd;
         return result;
     endfunction
 
+    // 严格无符号解析：空串取 dv；负数、非整数字面量或超过 max 返回 0 并给出原因，value 保持 dv
+    // （parse_int64_arg 则静默回落默认值）。name 非空时原因以 "name=s" 开头。
+    static function bit parse_uint_arg(string s, longint unsigned max, longint unsigned dv,
+                                       output longint unsigned value, output string why,
+                                       input string name = "");
+        aip_vec_t v;
+        int width;
+        bit negative;
+        string label;
+        value = dv;
+        why = "";
+        if (s == "") return 1;
+        label = (name == "") ? {"'", s, "'"} : {name, "=", s};
+        if (!aip_str::str_to_vec(s, v, width, negative)) begin
+            why = {label, ": not an unsigned integer literal"};
+            return 0;
+        end
+        if (negative) begin
+            why = {label, ": negative value; expected an unsigned integer literal"};
+            return 0;
+        end
+        if (v > aip_vec_t'(max)) begin
+            why = $sformatf("%s: exceeds the maximum 0x%0h", label, max);
+            return 0;
+        end
+        value = v[63:0];
+        return 1;
+    endfunction
+
     static function string parse_string_arg(string s, string default_val = "");
         string stripped;
         if (s == "") return default_val;
