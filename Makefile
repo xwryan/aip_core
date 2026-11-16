@@ -24,6 +24,7 @@ AIP_TEST_INCDIRS := +incdir+../.. +incdir+../../src/sv +incdir+../../src/sv/core
 .PHONY: all help test_reg_seq test_user_seq test_soload test_tcl_watchdog test_checkpoint_wait_tcl test_checkpoint_wait_vcs test_checkpoint_restore test_end_checker_registry test_cmdline_negative test_cmdline_container_syntax test_cmdline_print_control test_cmdline_wide test_cmdline_array_random test_cmdline_struct_schema_scalar test_cmdline_struct_schema_containers test_cmdline_struct_schema_typed_postprocess test_cmdline_struct_schema_nested test_cmdline_struct_schema_nested_canonical test_cmdline_struct_schema_final_review test_cmdline_struct_schema_queue test_cmdline_struct_schema_integration test_cmdline_struct_schema_negative test_cmdline_strict_queue test_cmdline_struct_schema_lifecycle test_cmdline_struct_schema_width_fail test_cmdline_struct_schema_primitive_arrays test_cmdline_struct_schema_size_budget test_cmdline_struct_schema test_core_package test_core_package_preinclude test_cpu_bridge test_cseq_arbitration test_c_bridge_socket test_dut_control test_str_delim test_cmd_str_result test_x_watch_vcs clean
 .PHONY: test_cmdline_zero_weight test_cmdline_diagnostics
 .PHONY: test_cmd_wait test_cmd_ack_progress test_wait_policy test_cmdline_query test_parse_uint_arg test_aip_flags
+.PHONY: test_seq_registry_active
 .PHONY: test_reg_wide
 .PHONY: test_cmd_result_context
 .PHONY: test_cmd_compat test_checkpoint_background test_checkpoint_cmdline test_cmdline_restore_loader_tcl ci-cmd
@@ -88,6 +89,7 @@ help:
 	@echo "  test_wait_policy (shared wait/timeout policy: multiplier, timeouts, attempt cap, load_params)"
 	@echo "  test_parse_uint_arg (strict unsigned command arguments: default, negative, non-numeric, max)"
 	@echo "  test_aip_flags (enum bit flags by name or mask: plusarg, set_param, hierarchy, fatal on unknown names)"
+	@echo "  test_seq_registry_active (aip_cmd_seq_registry::active: running, unregistered, killed owner, stale entry)"
 	@echo "  test_cmd_wait (per-command async wait=0 and synchronous default)"
 	@echo "  test_cmd_ack_progress (Tcl ACK wait counts only time without activity progress)"
 	@echo "  test_cmd_result_context (isolated results, legacy compatibility, expired-context rejection)"
@@ -360,6 +362,12 @@ test_parse_uint_arg:
 	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_parse_uint_arg -o simv_parse_uint_arg -Mdir=csrc_parse_uint_arg test_parse_uint_arg.sv
 	cd $(TEST_SV_DIR) && ./simv_parse_uint_arg > parse_uint_arg.log 2>&1 || { cat parse_uint_arg.log; exit 1; }
 	cd $(TEST_SV_DIR) && grep -E '^TPU_|TEST_PARSE_UINT_ARG|^UVM_(ERROR|FATAL) *:' parse_uint_arg.log && grep -q TEST_PARSE_UINT_ARG_PASS parse_uint_arg.log && ! grep -q TPU_FAIL parse_uint_arg.log
+
+# aip_cmd_seq_registry::active：执行中为 1，正常注销、登记进程被杀、进程结束未注销、未知名称为 0。
+test_seq_registry_active:
+	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_seq_registry_active -o simv_seq_registry_active -Mdir=csrc_seq_registry_active test_seq_registry_active.sv
+	cd $(TEST_SV_DIR) && ./simv_seq_registry_active > seq_registry_active.log 2>&1 || { cat seq_registry_active.log; exit 1; }
+	cd $(TEST_SV_DIR) && grep -E '^TSRA_|TEST_SEQ_REGISTRY_ACTIVE|^UVM_(ERROR|FATAL) *:' seq_registry_active.log && grep -q TEST_SEQ_REGISTRY_ACTIVE_PASS seq_registry_active.log && ! grep -q TSRA_FAIL seq_registry_active.log
 
 # aip_flags：成员名、整数掩码、set_param override 与层级路径；负例逐个单独运行，须非零退出并报出参数名与非法项。
 test_aip_flags:
@@ -1491,5 +1499,5 @@ ci-regress:
 ci-cmd:
 	$(MAKE) test_inject_queue
 	$(MAKE) test_cmd_str_result test_cmd_result_context test_cmd_compat test_cmd_wait test_cmd_ack_progress
-	$(MAKE) test_dut_control test_c_bridge_socket test_user_seq test_tcl_watchdog test_cseq_arbitration
+	$(MAKE) test_dut_control test_c_bridge_socket test_user_seq test_tcl_watchdog test_cseq_arbitration test_seq_registry_active
 	$(MAKE) test_checkpoint_background

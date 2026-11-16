@@ -286,6 +286,14 @@ class aip_cmd_seq_registry;
         return __aip_active_seqs.num();
     endfunction
 
+    // cmd_name 登记的 sequence 是否仍在执行：登记存在且登记进程未结束、未被杀；watchdog 取消后即为 0。
+    static function bit active(string cmd_name);
+        process owner;
+        if (!__aip_active_seqs.exists(cmd_name) || __aip_active_seqs[cmd_name] == null) return 0;
+        owner = __aip_active_seq_owners.exists(cmd_name) ? __aip_active_seq_owners[cmd_name] : null;
+        return owner != null && !(owner.status() inside {process::FINISHED, process::KILLED});
+    endfunction
+
     static function bit has_owner(process owner);
         foreach (__aip_active_seq_owners[name])
             if (__aip_active_seq_owners[name] == owner) return 1;

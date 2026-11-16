@@ -810,6 +810,8 @@ kill_seq                      ;# 手动杀全部活动 seq
 2. **TCL 命令**：上面的 `set_cmd_watchdog` / `kill_seq` / `watchdog_status`，运行时可控，不重编译。
 3. **SV hook（可选）**：`aip_cmd_watchdog_hook` 虚类，覆盖框架清理不到的脏状态（如复位 mailbox flag、外部资源）。
 
+业务需要判断某命令的 sequence 是否仍在执行（拒绝重入、与重载互斥）时调用 `aip_cmd_seq_registry::active("<cmd>")`：登记存在且登记进程未结束、未被杀才返回 1，watchdog 取消后立即为 0，不必另设状态位。
+
 ```systemverilog
 class my_hook extends aip_cmd_watchdog_hook;
     function void on_timeout(string cmd_str);
