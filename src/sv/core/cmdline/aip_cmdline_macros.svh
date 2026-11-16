@@ -115,6 +115,15 @@
             `aip_info(("[aip_cmdline] param '%s' (scope='%s') = %s (%0d)", `"_aip_v`", path, _aip_v.name(), _aip_v)); \
     end
 
+// 位标志：E 的成员值是位号，目标最多 64 位；值为单个整数掩码或逗号分隔的成员名，结果为各位之或。
+// 例：`aip_flags("dut", feat_e, feat, 0) 读 +dut.feat=TSO,CSUM 或 +dut.feat=0x801；未知名称 hard fatal。
+`define aip_flags(path, E, name, default_val) \
+    begin \
+        name = aip_cmdline_flags#(E)::resolve(`"name`", path, default_val, $bits(name), `__FILE__, `__LINE__); \
+        if (aip_cmdline_print_control::should_print(`"name`", path)) \
+            `aip_info(("[aip_cmdline] param '%s' (scope='%s') = %s", `"name`", path, aip_cmdline_flags#(E)::describe(name))); \
+    end
+
 // 旧版逐字段结构体宏（新代码推荐 schema API）：紧凑值 +path.name={field=v,...} 先赋，点号 +path.name.field=v 再覆盖。
 // begin/end 之间可执行任意用户代码，故诊断栈只在同步查询/解析期间保留。
 // 配置查询不能放入声明初始化式：module initial 内的静态初始化可能早于用户 set_val。

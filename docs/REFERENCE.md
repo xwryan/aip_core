@@ -418,6 +418,12 @@ typedef enum {FAST, SLOW} speed_e;
 speed_e spd;
 `aip_enum("dut", speed_e, spd, FAST)      // +dut.spd=SLOW
 
+// 位标志：成员值为位号，目标最多 64 位；值为成员名之或，或单个整数掩码；未知名称 hard fatal
+typedef enum {CSUM = 0, TSO = 11, V1 = 32} feat_e;
+bit [63:0] feat;
+`aip_flags("dut", feat_e, feat, 0)        // +dut.feat=V1,CSUM 或 +dut.feat=0x100000001
+// aip_cmdline_flags#(feat_e)::describe(feat) 返回 "0x100000001 (CSUM|V1)"，names(feat) 返回 "CSUM|V1"
+
 // 结构体（紧凑格式）
 typedef struct { int addr; int len; string name; } cfg_t;
 cfg_t cfg;
@@ -429,6 +435,10 @@ cfg_t cfg;
 // +dut.cfg={addr=0x100,len=64,name=hello}
 // +dut.cfg.addr=0xFF（点号优先级更高）
 ```
+
+`aip_flags` 的成员名（不区分大小写）与整数掩码不能混写，成员名优先于数字解析；整数写法同 `aip_int`
+固定值。来源优先级、`set_param`/`clear_param` 与层级路径同 `aip_int`，空 override 为 0。不支持随机语法，
+读取不消耗随机数；未知名称、空项、位号或数值超出目标位宽都 hard fatal，并报出参数路径与非法项。
 
 #### 随机化语法（标量与数组）
 

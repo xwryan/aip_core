@@ -23,7 +23,7 @@ AIP_TEST_INCDIRS := +incdir+../.. +incdir+../../src/sv +incdir+../../src/sv/core
 
 .PHONY: all help test_reg_seq test_user_seq test_soload test_tcl_watchdog test_checkpoint_wait_tcl test_checkpoint_wait_vcs test_checkpoint_restore test_end_checker_registry test_cmdline_negative test_cmdline_container_syntax test_cmdline_print_control test_cmdline_wide test_cmdline_array_random test_cmdline_struct_schema_scalar test_cmdline_struct_schema_containers test_cmdline_struct_schema_typed_postprocess test_cmdline_struct_schema_nested test_cmdline_struct_schema_nested_canonical test_cmdline_struct_schema_final_review test_cmdline_struct_schema_queue test_cmdline_struct_schema_integration test_cmdline_struct_schema_negative test_cmdline_strict_queue test_cmdline_struct_schema_lifecycle test_cmdline_struct_schema_width_fail test_cmdline_struct_schema_primitive_arrays test_cmdline_struct_schema_size_budget test_cmdline_struct_schema test_core_package test_core_package_preinclude test_cpu_bridge test_cseq_arbitration test_c_bridge_socket test_dut_control test_str_delim test_cmd_str_result test_x_watch_vcs clean
 .PHONY: test_cmdline_zero_weight test_cmdline_diagnostics
-.PHONY: test_cmd_wait test_cmd_ack_progress test_wait_policy test_cmdline_query test_parse_uint_arg
+.PHONY: test_cmd_wait test_cmd_ack_progress test_wait_policy test_cmdline_query test_parse_uint_arg test_aip_flags
 .PHONY: test_reg_wide
 .PHONY: test_cmd_result_context
 .PHONY: test_cmd_compat test_checkpoint_background test_checkpoint_cmdline test_cmdline_restore_loader_tcl ci-cmd
@@ -87,6 +87,7 @@ help:
 	@echo "  test_cpu_bridge test_reg_seq test_reg_wide test_user_seq test_soload test_tcl_watchdog test_checkpoint_wait_vcs"
 	@echo "  test_wait_policy (shared wait/timeout policy: multiplier, timeouts, attempt cap, load_params)"
 	@echo "  test_parse_uint_arg (strict unsigned command arguments: default, negative, non-numeric, max)"
+	@echo "  test_aip_flags (enum bit flags by name or mask: plusarg, set_param, hierarchy, fatal on unknown names)"
 	@echo "  test_cmd_wait (per-command async wait=0 and synchronous default)"
 	@echo "  test_cmd_ack_progress (Tcl ACK wait counts only time without activity progress)"
 	@echo "  test_cmd_result_context (isolated results, legacy compatibility, expired-context rejection)"
@@ -359,6 +360,32 @@ test_parse_uint_arg:
 	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_parse_uint_arg -o simv_parse_uint_arg -Mdir=csrc_parse_uint_arg test_parse_uint_arg.sv
 	cd $(TEST_SV_DIR) && ./simv_parse_uint_arg > parse_uint_arg.log 2>&1 || { cat parse_uint_arg.log; exit 1; }
 	cd $(TEST_SV_DIR) && grep -E '^TPU_|TEST_PARSE_UINT_ARG|^UVM_(ERROR|FATAL) *:' parse_uint_arg.log && grep -q TEST_PARSE_UINT_ARG_PASS parse_uint_arg.log && ! grep -q TPU_FAIL parse_uint_arg.log
+
+# aip_flags：成员名、整数掩码、set_param override 与层级路径；负例逐个单独运行，须非零退出并报出参数名与非法项。
+test_aip_flags:
+	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_aip_flags -o simv_aip_flags -Mdir=csrc_aip_flags test_aip_flags.sv
+	cd $(TEST_SV_DIR) && ./simv_aip_flags -exitstatus +taf.names=b,A,b "+taf.spaced= A , HIGH " +taf.num=0x8000_0000_0000_0011 "+taf.sized=8'b1010_0101" \
+	    +taf.neg=-1 +taf.dname=d0 +taf.narrow=B,D0 +taf.h0.pf1.vf2.i0.mask=D0,HIGH +mask=B > aip_flags.log 2>&1 || { cat aip_flags.log; exit 1; }
+	cd $(TEST_SV_DIR) && grep -E '^TAF_|TEST_AIP_FLAGS|^UVM_(ERROR|FATAL) *:' aip_flags.log && grep -q TEST_AIP_FLAGS_PASS aip_flags.log && ! grep -q TAF_FAIL aip_flags.log
+	cd $(TEST_SV_DIR) && grep -Fq "param 'names' (scope='taf') = 0x3 (A|B)" aip_flags.log && echo "TAF_OK:   registration log shows hex and names"
+	cd $(TEST_SV_DIR) && set -e; \
+	    for c in unknown hier empty mixed bit_range value_range; do \
+	        arg=+taf_neg=$$c; where="parameter='+taf.bad'"; \
+	        case $$c in \
+	            unknown)     arg="$$arg +taf.bad=A,BOGUS"; expect="unknown flag 'BOGUS'"; where="parameter='+taf.bad' value='A,BOGUS'";; \
+	            hier)        expect="unknown flag 'nope'"; where="parameter='+taf.h0.pf1.vf2.i0.bad' value='nope'";; \
+	            empty)       expect="empty flag name at item[1]";; \
+	            mixed)       expect="unknown flag '0x2'";; \
+	            bit_range)   expect="flag 'HIGH' is bit 63, outside the 8-bit target";; \
+	            value_range) expect="value 0x100 exceeds the 8-bit target";; \
+	        esac; \
+	        rc=0; ./simv_aip_flags -exitstatus $$arg > aip_flags_neg_$$c.log 2>&1 || rc=$$?; \
+	        test $$rc -ne 0 || { cat aip_flags_neg_$$c.log; echo "TAF_FAIL: negative $$c was accepted"; exit 1; }; \
+	        grep -F '[FATAL]' aip_flags_neg_$$c.log | grep -F "AIP_CORE[cmdline_flags] Error: $$expect" | grep -Fq "$$where" \
+	            || { cat aip_flags_neg_$$c.log; echo "TAF_FAIL: negative $$c diagnostics"; exit 1; }; \
+	        ! grep -q TAF_FAIL aip_flags_neg_$$c.log; \
+	        echo "TAF_OK:   negative $$c is a hard fatal: $$expect"; \
+	    done
 
 # Signed integer command-line parsing regression — requires VCS on PATH
 test_cmdline_negative:
@@ -1423,6 +1450,7 @@ clean:
 	rm -rf $(TEST_SV_DIR)/simv_str_delim $(TEST_SV_DIR)/simv_str_delim.daidir $(TEST_SV_DIR)/csrc_str_delim $(TEST_SV_DIR)/str_delim.log
 	rm -rf $(TEST_SV_DIR)/simv_cmd_str_result $(TEST_SV_DIR)/simv_cmd_str_result.daidir $(TEST_SV_DIR)/csrc_cmd_str_result $(TEST_SV_DIR)/cmd_str_result.log
 	rm -rf $(TEST_SV_DIR)/simv_parse_uint_arg $(TEST_SV_DIR)/simv_parse_uint_arg.daidir $(TEST_SV_DIR)/csrc_parse_uint_arg $(TEST_SV_DIR)/parse_uint_arg.log
+	rm -rf $(TEST_SV_DIR)/simv_aip_flags $(TEST_SV_DIR)/simv_aip_flags.daidir $(TEST_SV_DIR)/csrc_aip_flags $(TEST_SV_DIR)/aip_flags*.log
 	rm -rf $(TEST_SV_DIR)/simv_cmdline_negative $(TEST_SV_DIR)/simv_cmdline_negative.daidir $(TEST_SV_DIR)/csrc_cmdline_negative $(TEST_SV_DIR)/cmdline_negative.log
 	rm -rf $(TEST_SV_DIR)/simv_cmdline_zero_weight $(TEST_SV_DIR)/simv_cmdline_zero_weight.daidir $(TEST_SV_DIR)/csrc_cmdline_zero_weight $(TEST_SV_DIR)/cmdline_zero_weight*.log
 	rm -rf $(TEST_SV_DIR)/simv_cmdline_diagnostics $(TEST_SV_DIR)/simv_cmdline_diagnostics.daidir $(TEST_SV_DIR)/csrc_cmdline_diagnostics $(TEST_SV_DIR)/cmdline_diagnostics*.log

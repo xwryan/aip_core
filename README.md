@@ -629,6 +629,9 @@ string names[]; `aip_str_list("dut", names, "")           // 字符串数组（�
 typedef enum {FAST, SLOW} speed_e;
 speed_e spd;    `aip_enum("dut", speed_e, spd, FAST)      // +dut.spd=SLOW
 
+typedef enum {CSUM = 0, TSO = 11, V1 = 32} feat_e;        // 成员值为位号
+bit [63:0] feat; `aip_flags("dut", feat_e, feat, 0)       // +dut.feat=V1,CSUM 或 +dut.feat=0x100000001
+
 typedef struct { int addr; int len; string name; } cfg_t;
 cfg_t cfg;
 `aip_struct_begin("dut", cfg)                             // +dut.cfg={addr=0x100,len=64,name=x}
@@ -639,6 +642,28 @@ cfg_t cfg;
 ```
 
 path 支持多级，如 `"eth.ipv4.tcp"` → `+eth.ipv4.tcp.len=…`。
+
+#### 位标志（aip_flags）
+
+`aip_flags(path, E, name, default_val)` 把 `+path.name` 读成位掩码：`E` 是成员值为位号的枚举，
+目标变量最多 64 位。值有两种写法，不能混写：
+
+- 逗号分隔的成员名（不区分大小写，可带空格、可重复），结果为各 `1 << 成员值` 之或，如 `+dut.feat=V1,CSUM`；
+- 单个整数字面量，即掩码本身，写法同 `aip_int` 固定值（`0x`、`N'h`、`_` 分隔，负数按目标位宽回绕），
+  如 `+dut.feat=0x100000001`。
+
+成员名优先于数字解析，形如 `D0` 的成员名不会被读成十进制 0。来源优先级、`set_param`/`clear_param`
+与层级路径（含叶名回退）同 `aip_int`；空 override 为 0，未给出时取默认值。不支持随机语法，
+读取不消耗随机数。未知名称、空项、名称与数字混写、位号或数值超出目标位宽都 hard fatal，
+并报出参数路径、原始值和非法项：
+
+```text
+[FATAL] cfg.sv(42) @ 0.00 ns: AIP_CORE[cmdline_flags] Error: unknown flag 'TS0' (expected one integer mask or names of enum feat_e: CSUM, TSO, V1) parameter='+dut.feat' value='V1,TS0'
+```
+
+注册日志打印十六进制和成员名，如 `param 'feat' (scope='dut') = 0x100000801 (CSUM|TSO|V1)`。
+项目代码用同一枚举的 `aip_cmdline_flags#(E)::describe(mask)`（`0x100000801 (CSUM|TSO|V1)`）或
+`names(mask)`（`CSUM|TSO|V1`）格式化日志和错误信息；成员名按位号升序，没有成员名的置位位以十六进制余数结尾。
 
 #### Schema 注册（结构体、数组与队列）
 
@@ -821,6 +846,7 @@ VCS 值。以 argv 列表直接执行时写 `- "+dut.weight={0:=40,[1:3]:=60}"`�
 | 整数步长候选 | `inc:2:8:3` / `dec:8:2:3`，每次从 `2,5,8` 中抽样，并非逐次递增/递减 |
 | `aip_real` | `2.5e2`、`[50.0:200.0]`、`1.25,2.5,5.0`、权重组和 `inc/dec`；不支持整数的 `rand` |
 | `aip_string` / `aip_enum` | 字符串或枚举名称的逗号候选列表；枚举名称不区分大小写 |
+| `aip_flags` | 逗号分隔的成员名（取各位之或，不是候选列表）或单个整数掩码；不支持随机语法 |
 | 数组、队列、schema | 沿用各入口已有的列表、字段和控制键规则；整数 `seq/perm` 只用于支持它们的数组/队列入口 |
 
 整数区间为闭区间；实数非退化范围按既有浮点算法从下界开始抽样，数学公式不含上界，
@@ -868,6 +894,7 @@ plusarg 原有抽样路径保持不变；两侧能力一致不意味着穿插固
 |---|---|
 | `aip_cmdline_context.sv` | 前向类型声明、运行时 override 表、嵌套解析诊断上下文 |
 | `aip_cmdline_scalar.sv` | 基础类型解析、原有数组解析、旧版 compact struct 辅助、参数打印控制 |
+| `aip_cmdline_flags.sv` | 枚举位标志（`aip_flags`）解析与掩码按成员名格式化 |
 | `aip_struct_runtime.sv` | schema 元数据、字段规则查找、公共校验与容器规则处理 |
 | `aip_struct_arrays.sv` | 类型化字段辅助、schema 数组赋值及 unique/sort 后处理 |
 | `aip_cmdline_queues.sv` | 整数、字符串、real、枚举的严格队列解析 |
