@@ -7,7 +7,7 @@ adapter 在有效 lane 转入二态 RAL 数据前检查 X/Z，driver 不读取 m
 
 ## 运行
 
-VCS 生成、编译和仿真只能在 `10.11.10.53` 的 ubuntu bash 登录环境执行，
+VCS 生成、编译和仿真须在已配置 VCS 的 bash 登录环境执行，
 使用 W-2024.09-SP1 随附 UVM 1.2。环境须正确设置 VCS_HOME；不要求 UVM_HOME。
 
 ```sh

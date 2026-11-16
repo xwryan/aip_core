@@ -6,11 +6,11 @@ shell 脚本负责串行执行场景、检查结果并汇总。这里不包含�
 
 ## 在 53 上运行
 
-必须在 VCS 主机 `10.11.10.53` 运行，使用已配置 VCS 和许可证的交互式 bash 环境。
+必须在已配置 VCS 和许可证的主机上，用交互式 bash 环境运行。
 例如先登录，再在该主机上的工作副本根目录执行：
 
 ```bash
-ssh -t ubuntu@10.11.10.53 'bash -i'
+ssh -t <user>@<vcs-host> 'bash -i'
 source ~/.bashrc
 cd /path/to/aip_core
 make bench_cmdline
@@ -127,7 +127,7 @@ DUT 仿真的整体提速比例。真实收益还取决于项目中 apply 的调
 
 ### 环境与数据
 
-- 主机：`10.11.10.53`，8 vCPU，VMware 上的 Intel Xeon E5-2695 v4 @ 2.10GHz。
+- 主机：8 vCPU，VMware 上的 Intel Xeon E5-2695 v4 @ 2.10GHz。
 - VCS：`W-2024.09-SP1`，`-debug_access+r+w+f -full64 -lca`，seed 17。
 - 源码：提交 `6913070` 基础上的物理拆分工作树，含本目录基准；生产解析逻辑未优化。
 - 使用上述默认工作量串行执行，21 个场景、每场景 3 个独立样本，63 个样本全部通过

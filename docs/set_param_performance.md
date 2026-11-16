@@ -5,7 +5,7 @@ SV 在执行 `aip_int` / `aip_real` 等宏时抽样。这里测的是主机执�
 
 ## 方法与范围
 
-- 主机：`10.11.10.53`，VCS W-2024.09-SP1；基线为 `8067bcc`。
+- 环境：VCS W-2024.09-SP1；基线为 `8067bcc`。
 - 两个版本使用相同的 `test_set_param_benchmark.sv` 和 `cmdline_bench_clock.c`。
 - 每项预热 100 次，再读取 20,000 次；同进程重复三个区间，每次重置 RNG，取中位数。
 - 关闭参数打印，使用进程 CPU 时钟，同时记录单调墙钟和结果 checksum。
