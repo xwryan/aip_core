@@ -49,6 +49,20 @@
 `define AIP_CORE_PKG_PREINCLUDE_CONFLICT
 `elsif AIP_RAL_SERVICE_SV
 `define AIP_CORE_PKG_PREINCLUDE_CONFLICT
+`elsif AIP_SCB_TYPES_SV
+`define AIP_CORE_PKG_PREINCLUDE_CONFLICT
+`elsif AIP_SCB_REPORTER_SV
+`define AIP_CORE_PKG_PREINCLUDE_CONFLICT
+`elsif AIP_SCB_REGISTRY_SV
+`define AIP_CORE_PKG_PREINCLUDE_CONFLICT
+`elsif AIP_SCB_SV
+`define AIP_CORE_PKG_PREINCLUDE_CONFLICT
+`elsif AIP_SCB_CMD_SV
+`define AIP_CORE_PKG_PREINCLUDE_CONFLICT
+`elsif AIP_MON_HUB_SV
+`define AIP_CORE_PKG_PREINCLUDE_CONFLICT
+`elsif AIP_SAMPLE_SEQ_SV
+`define AIP_CORE_PKG_PREINCLUDE_CONFLICT
 `endif
 
 `ifdef AIP_CORE_PKG_PREINCLUDE_CONFLICT
@@ -104,6 +118,15 @@ import uvm_pkg::*;
 `include "ral/aip_ral_service.sv"
 `include "ral/aip_ral_test_runner.sv"
 `include "ral/aip_ral_commands.sv"
+
+// 公共 scoreboard 与整笔事务采样只依赖 UVM；scoreboard 的 Tcl 查询命令依赖 aip_cmd，放在其后。
+`include "scb/aip_scb_types.sv"
+`include "scb/aip_scb_reporter.sv"
+`include "scb/aip_scb_registry.sv"
+`include "scb/aip_scb.sv"
+`include "scb/aip_scb_cmd.sv"
+`include "sample/aip_mon_hub.sv"
+`include "sample/aip_sample_seq.sv"
 
 // 内置 Tcl 命令：宏用 escaped identifier 生成类名，故命令名可带 :: 命名空间。
 `aip_cmd_1i(sv::cpu_bridge_reinit,      aip_cpu_bridge_ops::reinit,      int, mbox_base, 32'h800E_0000)

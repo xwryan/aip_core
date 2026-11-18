@@ -1,0 +1,102 @@
+// 公共 scoreboard 的 Tcl 命令：scb_list/scb_status/scb_report/scb_set_limit。
+`ifndef AIP_SCB_CMD_SV
+`define AIP_SCB_CMD_SV
+
+
+class aip_scb_cmd;
+    protected static task finish(int status, string result);
+        aip_cmd::__aip_cmd_last_status = status;
+        aip_cmd::__aip_cmd_last_result = result;
+    endtask
+
+    protected static function aip_scb_control_proxy lookup(
+        string name,
+        output string error
+    );
+        aip_scb_control_proxy proxy;
+        proxy = aip_scb_registry::find(name);
+        if (proxy == null)
+            error = $sformatf("unknown scoreboard '%s'", name);
+        else
+            error = "";
+        return proxy;
+    endfunction
+
+    protected static function bit parse_int_exact(
+        string text,
+        output int value
+    );
+        return aip_scb_parse_int_exact(text, value);
+    endfunction
+
+    static task list(string unused);
+        string names[$];
+        string result;
+        result = "";
+        aip_scb_registry::get_names(names);
+        foreach (names[i])
+            result = {result, (i == 0) ? "" : "\n", names[i]};
+        finish(0, result);
+    endtask
+
+    static task status(string name);
+        string error;
+        aip_scb_control_proxy proxy;
+        proxy = lookup(name, error);
+        if (proxy == null) begin
+            finish(-1, error);
+            return;
+        end
+        finish(0, proxy.summary());
+    endtask
+
+    static task report(string name, string limit_text);
+        string error;
+        int limit;
+        aip_scb_control_proxy proxy;
+        proxy = lookup(name, error);
+        if (proxy == null) begin
+            finish(-1, error);
+            return;
+        end
+        if (!parse_int_exact(limit_text, limit)) begin
+            finish(-1, $sformatf("invalid report limit '%s'", limit_text));
+            return;
+        end
+        if (limit < -2) begin
+            finish(-1, $sformatf("invalid report limit '%s'", limit_text));
+            return;
+        end
+        proxy.report(limit);
+        finish(0, proxy.summary());
+    endtask
+
+    static task set_limit(string name, string limit_text);
+        string error;
+        int limit;
+        aip_scb_control_proxy proxy;
+        proxy = lookup(name, error);
+        if (proxy == null) begin
+            finish(-1, error);
+            return;
+        end
+        if (!parse_int_exact(limit_text, limit)) begin
+            finish(-1, $sformatf("invalid report limit '%s'", limit_text));
+            return;
+        end
+        if (!proxy.set_report_limit(limit, error)) begin
+            finish(-1, error);
+            return;
+        end
+        finish(0, $sformatf("%s report_limit=%0d", name, limit));
+    endtask
+endclass
+
+`aip_cmd_str_1i_status(scb_list, aip_scb_cmd::list, unused, "")
+`aip_cmd_str_1i_status(scb_status, aip_scb_cmd::status, name, "")
+`aip_cmd_str_2i_status(scb_report, aip_scb_cmd::report,
+                       name, "", limit, "-2")
+`aip_cmd_str_2i_status(scb_set_limit, aip_scb_cmd::set_limit,
+                       name, "", limit, "")
+
+`endif

@@ -1174,6 +1174,63 @@ RAM写值比较，不关闭Completion状态、tag、长度或超时检查；普�
 | 退出 | drop_objection | `end_test drain=N` |
 | 调试 | 改代码重编译重跑 | Tcl 交互式试探 |
 
+### 5.6 公共 scoreboard 与整笔事务采样（aip_scb / aip_mon_hub）
+
+两组组件都只依赖 UVM，随 `aip_core_pkg` 编译，不需要 Tcl 运行库；生成器产出的 UVM 平台可直接使用。
+
+**公共 scoreboard `aip_scb#(T)`**（`src/sv/scb/`）：按 stream 保存 expected/actual，`push_expected` 与
+`push_actual` 任一侧先到都能匹配，内部深拷贝。比较模式由 `aip_scb_cfg.m_cmp_mode` 选择
+`AIP_SCB_ORDERED_EXACT` / `AIP_SCB_ORDERED_LOSSY` / `AIP_SCB_UNORDERED`；协议有稳定报文键时用
+`push_expected_keyed/push_actual_keyed`。check_phase 汇总未匹配项，报告状态文字为 `SCB_PASS/SCB_WARN/SCB_FAIL`。
+
+```systemverilog
+aip_scb#(axi_trans) m_scb = aip_scb#(axi_trans)::type_id::create("m_scb", this);
+m_scb.push_expected(exp_tr, exp_tr.get_scb_stream_id(), exp_tr.get_scb_kind());
+m_scb.push_actual(act_tr, act_tr.get_scb_stream_id(), act_tr.get_scb_kind());
+```
+
+每个实例按全名登记，Tcl 可查询：`scb_list`、`scb_status name=<全名>`、`scb_report name=<全名> limit=N`、
+`scb_set_limit name=<全名> limit=N`（-1 不限，0 只出汇总）。
+
+**整笔事务采样**（`src/sv/sample/`）：agent 的 monitor 把事务写进 `aip_mon_hub#(T)`，hub 为每个订阅
+（portid）保存独立深拷贝队列；RM、SCB、覆盖率各用一个 portid，互不抢数据。agent 的 sequencer 继承
+`aip_sample_sqr#(T)` 并持有 hub，passive agent 也创建（`can_send=0`，只能采样）；sequence 继承
+`aip_sample_seq#(T)`，RM/SCB 持有长期对象，只调用 `set_sequencer()` 关联、不调用 `start()`。
+
+```systemverilog
+// agent：monitor → hub，sequencer 持有 hub；复位沿通知 hub
+m_mon.m_ap.connect(m_hub.analysis_export);
+m_sqr.m_hub = m_hub;
+m_hub.set_reset(1);            // rst_n 断言；释放时 set_reset(0)
+
+// RM/SCB：connect 之后、产生流量之前订阅
+m_seq.set_sequencer(m_agt.m_sqr);   // 或 aip_sample_sqr#(T)::get_sqr("<agent 全名>")
+m_seq.subscribe(0);
+forever begin
+    axi_trans tr;
+    m_seq.mon_xaction(tr, 0);       // 可加 timeout；返回 null 表示超时或已取消
+    if (tr == null) break;
+    ...
+end
+```
+
+| 情况 | 行为 |
+| --- | --- |
+| 队列有事务 | 立即移交队首，不增加等待 |
+| 队列空，timeout=0 | 阻塞到下一笔事务或取消订阅 |
+| 非零 timeout 到期 | 返回 null，报 `AIP_MON_TIMEOUT`（UVM_ERROR） |
+| 取消订阅 | 清空该队列，等待者返回 null；重订阅同编号建立新队列 |
+| 未订阅时产生的事务 | 不保存历史；必须先订阅再发包 |
+| 队列达到 depth（默认 1024） | `AIP_MON_OVERFLOW` fatal，不静默丢弃，也不部分广播 |
+| 同一订阅两个活跃读者 | `AIP_MON_READER` fatal；读者进程被 kill 后可由新读者接管 |
+| 复位断言 | 清空全部队列、保留订阅和等待者，`reset_epoch()` 加一；复位期间到达的事务丢弃 |
+
+复位变化经 `reset_ap`（`aip_mon_reset_t`：`asserted`、`epoch`）发布，也可用 `wait_reset()` 阻塞等待。已被取走、
+仍在预测中的事务归消费者处理：处理前后比较 `reset_epoch()`，变化即丢弃旧结果。结束测试前仍需核对数量、
+driver/monitor 空闲和 scoreboard 无残留，`is_idle()` 只说明订阅队列为空。
+
+回归：`make test_scb`（14 组报告上限参数矩阵）、`make test_mon_hub`。
+
 ---
 
 ## 6. 日志 / 时钟 / 时间 / 字符串工具
@@ -2108,6 +2165,8 @@ CONFLICTS (timescale 中途变化, 1 处):
 make help                    # 列出全部 target
 make ci                      # ci-host + ci-sv + ci-regress（含命令/快照/同会话续跑）
 make test_core_package       # 单个 SV 回归，其余见 make help
+make test_scb                # 公共 scoreboard 语义与报告矩阵
+make test_mon_hub            # 整笔事务采样 hub / 采样 sequence
 make test_cmdline_zero_weight # 零权重、全零/负权重及用户源码定位
 make test_cmdline_diagnostics # 非权重错误定位、FATAL 退出和禁止错误后继续执行
 make test_cmdline_split       # 分层后的原入口兼容性、确定性样例及内部片段独立编译拒绝检查

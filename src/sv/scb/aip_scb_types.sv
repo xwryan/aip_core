@@ -1,0 +1,164 @@
+// 公共 scoreboard 的配置、比较模式、待比项与结果类型；不依赖 DUT 和 agent。
+`ifndef AIP_SCB_TYPES_SV
+`define AIP_SCB_TYPES_SV
+
+typedef enum int {
+    AIP_SCB_ORDERED_EXACT,
+    AIP_SCB_ORDERED_LOSSY,
+    AIP_SCB_UNORDERED
+} aip_scb_cmp_mode_e;
+
+typedef enum int {AIP_SCB_PASS, AIP_SCB_WARN, AIP_SCB_FAIL} aip_scb_status_e;
+
+// 报告沿用原有状态文字（SCB_PASS/SCB_WARN/SCB_FAIL），不随枚举改名变化，便于日志解析。
+function automatic string aip_scb_status_text(aip_scb_status_e status);
+    case (status)
+        AIP_SCB_PASS: return "SCB_PASS";
+        AIP_SCB_WARN: return "SCB_WARN";
+        default:      return "SCB_FAIL";
+    endcase
+endfunction
+
+function automatic bit aip_scb_parse_int_exact(string text,
+                                                   output int value);
+    int index;
+    int i;
+    int digit;
+    bit negative;
+    longint unsigned magnitude;
+    longint unsigned max_magnitude;
+
+    value = 0;
+    if (text.len() == 0) return 0;
+
+    index = 0;
+    negative = 0;
+    if ((text[0] == "+") || (text[0] == "-")) begin
+        negative = (text[0] == "-");
+        index = 1;
+    end
+    if (index == text.len()) return 0;
+
+    magnitude = 0;
+    max_magnitude = negative ? 64'd2147483648 : 64'd2147483647;
+    for (i = index; i < text.len(); i++) begin
+        if (!(text[i] inside {["0":"9"]})) return 0;
+        digit = text[i] - "0";
+        if (magnitude > (max_magnitude - digit) / 10) return 0;
+        magnitude = (magnitude * 10) + digit;
+    end
+
+    if (negative) begin
+        if (magnitude == 64'd2147483648)
+            value = -2147483647 - 1;
+        else
+            value = -int'(magnitude);
+    end else begin
+        value = int'(magnitude);
+    end
+    return 1;
+endfunction
+
+class aip_scb_cfg extends uvm_object;
+    `uvm_object_utils(aip_scb_cfg)
+    aip_scb_cmp_mode_e m_cmp_mode = AIP_SCB_UNORDERED;
+    int m_report_limit = 10;
+    int m_err_limit = 10;
+    int m_pending_limit = 0;
+    bit m_report_en = 1;
+    bit m_clone_en = 1;
+    bit m_strict_arrival = 0;
+
+    function new(string name="aip_scb_cfg");
+        super.new(name);
+    endfunction
+endclass
+
+class aip_scb_pending_item #(type TRANS_TYPE=uvm_sequence_item);
+    TRANS_TYPE tr;
+    int kind;
+    string packet_key;
+    bit keyed;
+
+    // 功能：保存一侧待比较事务及其可选报文键。
+    // 输入/输出：输入为事务、kind、packet_key 和 keyed；无返回值。
+    // 边界/副作用：packet_key 只在 keyed=1 时参与匹配；重复键由上层队列保留。
+    function new(TRANS_TYPE tr=null, int kind=-1,
+                 string packet_key="", bit keyed=0);
+        this.tr = tr;
+        this.kind = kind;
+        this.packet_key = packet_key;
+        this.keyed = keyed;
+    endfunction
+endclass
+
+class aip_scb_result #(type TRANS_TYPE=uvm_sequence_item) extends uvm_object;
+    `uvm_object_param_utils(aip_scb_result #(TRANS_TYPE))
+    TRANS_TYPE expected;
+    TRANS_TYPE actual;
+    longint unsigned stream_id;
+    int kind;
+    string packet_key;
+    bit matched;
+    string diff;
+    function new(string name="aip_scb_result");
+        super.new(name);
+    endfunction
+endclass
+
+class aip_scb_stream_state #(type TRANS_TYPE=uvm_sequence_item);
+    typedef aip_scb_pending_item#(TRANS_TYPE) pending_t;
+    pending_t expected_q[$];
+    pending_t actual_q[$];
+    // keyed 队列按报文键保留重复项，不能使用单个 associative-array 元素覆盖。
+    pending_t expected_by_key[string][$];
+    pending_t actual_by_key[string][$];
+    longint unsigned stream_id;
+    longint unsigned expected_inputs;
+    longint unsigned actual_inputs;
+    longint unsigned match_count;
+    longint unsigned mismatches;
+    longint unsigned allowed_drops;
+    longint unsigned unexpected_actuals;
+    longint unsigned overflows;
+    longint unsigned diagnostic_warnings;
+    longint unsigned peak_pending;
+    longint unsigned suppressed_details;
+    function new(longint unsigned stream_id=0);
+        this.stream_id = stream_id;
+    endfunction
+    function longint unsigned issue_count();
+        return mismatches + allowed_drops + unexpected_actuals + overflows
+             + diagnostic_warnings + expected_q.size() + actual_q.size()
+             + keyed_expected_count() + keyed_actual_count();
+    endfunction
+
+    // 功能：统计当前 stream 中 keyed expected 的待比较项。
+    // 输入/输出：无输入，返回待比较项数量。
+    // 边界/副作用：只读遍历，不改变 associative array。
+    function longint unsigned keyed_expected_count();
+        longint unsigned count;
+        count = 0;
+        foreach (expected_by_key[key]) count += expected_by_key[key].size();
+        return count;
+    endfunction
+
+    // 功能：统计当前 stream 中 keyed actual 的待比较项。
+    // 输入/输出：无输入，返回待比较项数量。
+    // 边界/副作用：只读遍历，不改变 associative array。
+    function longint unsigned keyed_actual_count();
+        longint unsigned count;
+        count = 0;
+        foreach (actual_by_key[key]) count += actual_by_key[key].size();
+        return count;
+    endfunction
+endclass
+
+class aip_scb_problem_row;
+    aip_scb_status_e status;
+    longint unsigned stream_id;
+    longint unsigned issue_count;
+    string cells[$];
+endclass
+
+`endif

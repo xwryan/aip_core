@@ -114,11 +114,11 @@ data=0xdeadbeef
 
 ```text
 src/
-├── sv/{core,bridge,util,plugin}/
+├── sv/{core,bridge,util,plugin,scb,sample}/
 ├── tcl/
 └── c/{runtime,client}/
 include/                 # C 插件 ABI 头文件
-tests/{sv,tcl,c,plugins}/ # 项目级回归测试，按语言和插件类型分组
+tests/{sv,tcl,c,plugins,scb}/ # 项目级回归测试，按语言和插件类型分组
 dist/                   # 发布 Makefile、aip_init_so.tcl 和产物目录
 ```
 
@@ -153,6 +153,13 @@ dist/                   # 发布 Makefile、aip_init_so.tcl 和产物目录
 | `src/sv/bridge/aip_c_bridge.sv` | Socket/DPI-C 命令桥接 | aip_cmd, src/c/runtime/sv_socket_dpi.c |
 | `src/sv/bridge/aip_tcl_bridge.sv` | TCL/UCLI 命令桥接 | aip_cmd |
 | `src/sv/bridge/aip_dut_control.sv` | 注册受控 DUT force/deposit/get/release 及动态路径 readmemh/readmemb 命令 | aip_cmd, uvm_hdl |
+| `src/sv/scb/aip_scb_types.sv` | scoreboard 配置、比较模式、待比项/结果类型、状态文字 | uvm_pkg |
+| `src/sv/scb/aip_scb_reporter.sv` | scoreboard 问题流表格报告 | uvm_pkg |
+| `src/sv/scb/aip_scb_registry.sv` | scoreboard 名字登记与控制代理 | uvm_pkg |
+| `src/sv/scb/aip_scb.sv` | 公共 scoreboard `aip_scb#(T)`：有序/有损/无序/按键匹配，任一侧先到 | aip_scb_types/reporter/registry |
+| `src/sv/scb/aip_scb_cmd.sv` | Tcl 命令 scb_list/scb_status/scb_report/scb_set_limit | aip_cmd, aip_scb_registry |
+| `src/sv/sample/aip_mon_hub.sv` | 整笔事务采样 hub：按 portid 订阅独立深拷贝队列，复位清队列并发布通知 | uvm_pkg |
+| `src/sv/sample/aip_sample_seq.sv` | 采样 sequencer/sequence 基类：按 agent 名登记，subscribe/mon_xaction/unsubscribe | aip_mon_hub |
 
 ### C 文件
 
@@ -242,6 +249,8 @@ make test_cseq_arbitration  # cseq/creg grab 顺序 + 回读 — VCS
 make test_c_bridge_socket   # 默认不监听、显式启动、TCP OK/ERROR、cseq — VCS + Python
 make test_c_bridge_checkpoint # 新进程恢复未监听快照，再显式开启 TCP
 make test_dut_control       # dut_force/deposit/get/release/force_time/readmem — VCS
+make test_scb               # aip_scb 匹配语义与 14 组报告上限矩阵 — VCS
+make test_mon_hub           # aip_mon_hub/aip_sample_seq 订阅、超时、复位、溢出、读者 — VCS
 make -C dist test-ucli-so   # dist/aip_init_so.tcl + UCLI -do smoke — VCS + gcc
 ```
 

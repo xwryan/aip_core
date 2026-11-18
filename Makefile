@@ -25,6 +25,7 @@ AIP_TEST_INCDIRS := +incdir+../.. +incdir+../../src/sv +incdir+../../src/sv/core
 .PHONY: test_cmdline_zero_weight test_cmdline_diagnostics
 .PHONY: test_cmd_wait test_cmd_ack_progress test_wait_policy test_cmdline_query test_parse_uint_arg test_aip_flags
 .PHONY: test_seq_registry_active
+.PHONY: test_scb test_mon_hub
 .PHONY: test_reg_wide
 .PHONY: test_cmd_result_context
 .PHONY: test_cmd_compat test_checkpoint_background test_checkpoint_cmdline test_cmdline_restore_loader_tcl ci-cmd
@@ -90,6 +91,8 @@ help:
 	@echo "  test_parse_uint_arg (strict unsigned command arguments: default, negative, non-numeric, max)"
 	@echo "  test_aip_flags (enum bit flags by name or mask: plusarg, set_param, hierarchy, fatal on unknown names)"
 	@echo "  test_seq_registry_active (aip_cmd_seq_registry::active: running, unregistered, killed owner, stale entry)"
+	@echo "  test_scb (aip_scb ordered/lossy/unordered/keyed matching and the 14-case report-limit matrix)"
+	@echo "  test_mon_hub (aip_mon_hub/aip_sample_seq: per-subscriber copies, blocking/timeout, reset, overflow, readers)"
 	@echo "  test_cmd_wait (per-command async wait=0 and synchronous default)"
 	@echo "  test_cmd_ack_progress (Tcl ACK wait counts only time without activity progress)"
 	@echo "  test_cmd_result_context (isolated results, legacy compatibility, expired-context rejection)"
@@ -368,6 +371,16 @@ test_seq_registry_active:
 	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_seq_registry_active -o simv_seq_registry_active -Mdir=csrc_seq_registry_active test_seq_registry_active.sv
 	cd $(TEST_SV_DIR) && ./simv_seq_registry_active > seq_registry_active.log 2>&1 || { cat seq_registry_active.log; exit 1; }
 	cd $(TEST_SV_DIR) && grep -E '^TSRA_|TEST_SEQ_REGISTRY_ACTIVE|^UVM_(ERROR|FATAL) *:' seq_registry_active.log && grep -q TEST_SEQ_REGISTRY_ACTIVE_PASS seq_registry_active.log && ! grep -q TSRA_FAIL seq_registry_active.log
+
+# aip_scb 语义与报告矩阵：同一 simv 跑 14 组报告上限参数，逐组核对标记、问题流汇总和 UVM 日志。
+test_scb:
+	bash tests/scb/run_scb_unit.sh
+
+# aip_mon_hub/aip_sample_seq：订阅副本、阻塞/超时/取消、复位清队列与通知、溢出、单读者独占、seq 采样路径。
+test_mon_hub:
+	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_mon_hub -o simv_mon_hub -Mdir=csrc_mon_hub test_mon_hub.sv
+	cd $(TEST_SV_DIR) && ./simv_mon_hub > mon_hub.log 2>&1 || { cat mon_hub.log; exit 1; }
+	cd $(TEST_SV_DIR) && grep -E '^TMH_|TEST_MON_HUB|^UVM_(ERROR|FATAL) *:' mon_hub.log && grep -q TEST_MON_HUB_PASS mon_hub.log && ! grep -q TMH_FAIL mon_hub.log
 
 # aip_flags：成员名、整数掩码、set_param override 与层级路径；负例逐个单独运行，须非零退出并报出参数名与非法项。
 test_aip_flags:

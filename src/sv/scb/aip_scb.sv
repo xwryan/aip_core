@@ -1,0 +1,866 @@
+// 公共 scoreboard：按 stream 有序/无序/按键匹配 expected 与 actual，任一侧先到都可匹配。
+`ifndef AIP_SCB_SV
+`define AIP_SCB_SV
+
+class aip_scb #(type TRANS_TYPE,
+                       int STREAM_ID_WIDTH=64) extends uvm_scoreboard;
+    typedef bit [STREAM_ID_WIDTH-1:0] stream_id_t;
+    typedef string packet_key_t;
+    typedef aip_scb_pending_item#(TRANS_TYPE) pending_t;
+    typedef aip_scb_stream_state#(TRANS_TYPE) state_t;
+    typedef aip_scb_result#(TRANS_TYPE) result_t;
+
+    `uvm_component_param_utils(aip_scb #(TRANS_TYPE, STREAM_ID_WIDTH))
+
+    aip_scb_cfg m_cfg;
+    uvm_analysis_port#(result_t) m_result_ap;
+    protected aip_scb_control_proxy m_proxy;
+    protected state_t m_streams[stream_id_t];
+    protected longint unsigned m_expected_inputs;
+    protected longint unsigned m_actual_inputs;
+    protected longint unsigned m_matches;
+    protected longint unsigned m_mismatches;
+    protected longint unsigned m_allowed_drops;
+    protected longint unsigned m_unexpected_actuals;
+    protected longint unsigned m_overflows;
+    protected longint unsigned m_diagnostic_warnings;
+    protected longint unsigned m_current_pending;
+    protected longint unsigned m_peak_pending;
+    protected longint unsigned m_detail_emitted;
+    protected longint unsigned m_suppressed_details;
+    protected bit m_strict_arrival_warned;
+    protected bit m_finalized;
+    protected bit m_final_status_reported;
+
+    extern function new(string name="aip_scb", uvm_component parent=null);
+    extern virtual function void build_phase(uvm_phase phase);
+    extern virtual function bit compare_items(TRANS_TYPE expected,
+                                               TRANS_TYPE actual,
+                                               int kind,
+                                               output string diff);
+    extern function void push_expected(TRANS_TYPE tr,
+                                       stream_id_t stream_id='1,
+                                       int kind=-1);
+    extern function void push_actual(TRANS_TYPE tr,
+                                     stream_id_t stream_id='1,
+                                     int kind=-1);
+    // keyed API 只增加稳定报文键，不改变原 ordered/unordered 接口。
+    // 同一 stream 和 packet_key 的重复报文按 FIFO 保留，不覆盖已有项。
+    extern function void push_expected_keyed(TRANS_TYPE tr,
+                                             stream_id_t stream_id='1,
+                                             int kind=-1,
+                                             packet_key_t packet_key="");
+    extern function void push_actual_keyed(TRANS_TYPE tr,
+                                           stream_id_t stream_id='1,
+                                           int kind=-1,
+                                           packet_key_t packet_key="");
+    extern function aip_scb_status_e get_status();
+    extern function bit is_clean();
+    extern function string get_summary();
+    extern function void print_report(int limit=-2);
+    extern function void reset_state(bit clear_counters=1);
+    extern virtual function void check_phase(uvm_phase phase);
+    extern virtual function void report_phase(uvm_phase phase);
+
+    extern virtual task send_rm_trans_to_cmp(TRANS_TYPE rm_tr,
+                                              stream_id_t stream_id='1,
+                                              int kind=-1);
+    extern virtual task send_dut_trans_to_cmp(TRANS_TYPE dut_tr,
+                                               stream_id_t stream_id='1,
+                                               int kind=-1);
+
+    extern protected function state_t state_for(stream_id_t stream_id);
+    extern protected function bit retained_copy(TRANS_TYPE source,
+                                                 stream_id_t stream_id,
+                                                 string side,
+                                                 output TRANS_TYPE retained);
+    extern protected function bit can_enqueue(state_t state,
+                                               stream_id_t stream_id,
+                                               string side,
+                                               int depth);
+    extern protected function void reconcile_ordered_exact(state_t state);
+    extern protected function void reconcile_ordered_lossy(state_t state);
+    extern protected function void reconcile_unordered_expected(state_t state);
+    extern protected function void reconcile_unordered_actual(state_t state);
+    extern function void reconcile_keyed_expected(
+        state_t state, packet_key_t packet_key);
+    extern function void reconcile_keyed_actual(
+        state_t state, packet_key_t packet_key);
+    extern protected function void record_match(state_t state,
+                                                 pending_t expected,
+                                                 pending_t actual,
+                                                 string diff="");
+    extern protected function void record_mismatch(state_t state,
+                                                    pending_t expected,
+                                                    pending_t actual,
+                                                    string diff);
+    extern protected function void record_drop(state_t state, pending_t expected);
+    extern protected function void record_unexpected(state_t state, pending_t actual,
+                                                      string reason);
+    extern protected function void record_overflow(state_t state,
+                                                    stream_id_t stream_id,
+                                                    string side,
+                                                    TRANS_TYPE tr,
+                                                    int kind);
+    extern protected function void emit_detail(stream_id_t stream_id,
+                                                string id,
+                                                string message);
+    extern protected function void publish_result(state_t state,
+                                                  pending_t expected,
+                                                  pending_t actual,
+                                                  bit matched,
+                                                  string diff);
+    extern protected function void update_peak(state_t state);
+    extern protected function bit row_before(aip_scb_problem_row left,
+                                              aip_scb_problem_row right);
+    extern protected function aip_scb_problem_row make_row(state_t state);
+    extern protected function void finalize_pending();
+    extern function void finalize_keyed_pending(state_t state);
+endclass
+
+class aip_scb_typed_proxy #(type TRANS_TYPE,
+                               int STREAM_ID_WIDTH=64)
+    extends aip_scb_control_proxy;
+    typedef aip_scb#(TRANS_TYPE, STREAM_ID_WIDTH) scoreboard_t;
+    protected scoreboard_t m_scoreboard;
+
+    function new(string name, scoreboard_t scoreboard);
+        super.new(name);
+        m_scoreboard = scoreboard;
+    endfunction
+
+    virtual function string scoreboard_name();
+        return m_scoreboard.get_full_name();
+    endfunction
+
+    virtual function aip_scb_status_e status();
+        return m_scoreboard.get_status();
+    endfunction
+
+    virtual function string summary();
+        return m_scoreboard.get_summary();
+    endfunction
+
+    virtual function void report(int limit=-2);
+        m_scoreboard.print_report(limit);
+    endfunction
+
+    virtual function bit set_report_limit(int limit, output string error);
+        if (limit < -1) begin
+            error = $sformatf("report limit must be -1 or non-negative, got %0d", limit);
+            return 0;
+        end
+        m_scoreboard.m_cfg.m_report_limit = limit;
+        error = "";
+        return 1;
+    endfunction
+endclass
+
+function aip_scb::new(string name="aip_scb",
+                             uvm_component parent=null);
+    super.new(name, parent);
+    m_cfg = new();
+    m_result_ap = new("m_result_ap", this);
+endfunction
+
+function void aip_scb::build_phase(uvm_phase phase);
+    aip_scb_cfg configured;
+    int value;
+    string value_text;
+    super.build_phase(phase);
+    if ((STREAM_ID_WIDTH < 1) || (STREAM_ID_WIDTH > 64))
+        `uvm_fatal("SCB_CFG",
+                   $sformatf("STREAM_ID_WIDTH must be in range 1..64; got %0d",
+                             STREAM_ID_WIDTH))
+    if (uvm_config_db#(aip_scb_cfg)::get(this, "", "cfg", configured)) begin
+        if (configured != null)
+            m_cfg = configured;
+        else
+            `uvm_warning("SCB_CFG", "null cfg override ignored; using default")
+    end
+    if (m_cfg.m_report_limit < -1) begin
+        `uvm_warning("SCB_CFG",
+                     $sformatf("configured m_report_limit=%0d is below -1; using 10",
+                               m_cfg.m_report_limit))
+        m_cfg.m_report_limit = 10;
+    end
+    if ($test$plusargs("SCB_REPORT_LIMIT=")) begin
+        value_text = "";
+        if ($value$plusargs("SCB_REPORT_LIMIT=%s", value_text)
+            && aip_scb_parse_int_exact(value_text, value)
+            && (value >= -1))
+            m_cfg.m_report_limit = value;
+        else
+            `uvm_warning("SCB_CFG",
+                         $sformatf("invalid SCB_REPORT_LIMIT='%s'; ignoring override",
+                                   value_text))
+    end
+    if (m_cfg.m_err_limit < 0) begin
+        `uvm_warning("SCB_CFG", "m_err_limit must be non-negative; using 10")
+        m_cfg.m_err_limit = 10;
+    end
+    if (m_cfg.m_pending_limit < 0) begin
+        `uvm_warning("SCB_CFG", "m_pending_limit must be non-negative; using 0")
+        m_cfg.m_pending_limit = 0;
+    end
+    case (m_cfg.m_cmp_mode)
+        AIP_SCB_ORDERED_EXACT, AIP_SCB_ORDERED_LOSSY, AIP_SCB_UNORDERED: ;
+        default: begin
+            `uvm_warning("SCB_CFG",
+                         $sformatf("invalid m_cmp_mode=%0d; using AIP_SCB_UNORDERED",
+                                   m_cfg.m_cmp_mode))
+            m_cfg.m_cmp_mode = AIP_SCB_UNORDERED;
+        end
+    endcase
+    begin
+        aip_scb_typed_proxy#(TRANS_TYPE, STREAM_ID_WIDTH) typed_proxy;
+        string registry_error;
+        typed_proxy = new({get_name(), "_proxy"}, this);
+        m_proxy = typed_proxy;
+        if (!aip_scb_registry::register_proxy(m_proxy, registry_error))
+            `uvm_error("SCB_REGISTRY", registry_error)
+    end
+endfunction
+
+function aip_scb::state_t aip_scb::state_for(
+    stream_id_t stream_id
+);
+    if (!m_streams.exists(stream_id))
+        m_streams[stream_id] = new(stream_id);
+    return m_streams[stream_id];
+endfunction
+
+function bit aip_scb::retained_copy(TRANS_TYPE source,
+                                           stream_id_t stream_id,
+                                           string side,
+                                           output TRANS_TYPE retained);
+    uvm_object cloned;
+    state_t state;
+    state = state_for(stream_id);
+    retained = null;
+    if (source == null) begin
+        record_overflow(state, stream_id, side, source, -1);
+        emit_detail(stream_id, "SCB_NULL_INPUT", {side, " input is null"});
+        return 0;
+    end
+    if (!m_cfg.m_clone_en) begin
+        retained = source;
+        return 1;
+    end
+    cloned = source.clone();
+    if ((cloned == null) || !$cast(retained, cloned)) begin
+        record_overflow(state, stream_id, side, source, -1);
+        emit_detail(stream_id, "SCB_CLONE_FAILED",
+                    {side, " input clone failed typed cast"});
+        return 0;
+    end
+    return 1;
+endfunction
+
+function bit aip_scb::can_enqueue(state_t state,
+                                         stream_id_t stream_id,
+                                         string side,
+                                         int depth);
+    if ((m_cfg.m_pending_limit != 0) && (depth >= m_cfg.m_pending_limit)) begin
+        record_overflow(state, stream_id, side, null, -1);
+        emit_detail(stream_id, "SCB_PENDING_OVERFLOW",
+                    $sformatf("%s pending depth=%0d limit=%0d",
+                              side, depth, m_cfg.m_pending_limit));
+        return 0;
+    end
+    return 1;
+endfunction
+
+function void aip_scb::push_expected(TRANS_TYPE tr,
+                                            stream_id_t stream_id='1,
+                                            int kind=-1);
+    TRANS_TYPE retained;
+    state_t state;
+    pending_t pending;
+    state = state_for(stream_id);
+    m_expected_inputs++;
+    state.expected_inputs++;
+    if (!retained_copy(tr, stream_id, "expected", retained)) return;
+    if (!can_enqueue(state, stream_id, "expected", state.expected_q.size())) return;
+    pending = new(retained, kind);
+    state.expected_q.push_back(pending);
+    m_current_pending++;
+    update_peak(state);
+    case (m_cfg.m_cmp_mode)
+        AIP_SCB_ORDERED_EXACT: reconcile_ordered_exact(state);
+        AIP_SCB_ORDERED_LOSSY: reconcile_ordered_lossy(state);
+        AIP_SCB_UNORDERED:     reconcile_unordered_expected(state);
+        default:           reconcile_unordered_expected(state);
+    endcase
+endfunction
+
+function void aip_scb::push_actual(TRANS_TYPE tr,
+                                          stream_id_t stream_id='1,
+                                          int kind=-1);
+    TRANS_TYPE retained;
+    state_t state;
+    pending_t pending;
+    state = state_for(stream_id);
+    m_actual_inputs++;
+    state.actual_inputs++;
+    if (m_cfg.m_strict_arrival && (state.expected_q.size() == 0)) begin
+        m_diagnostic_warnings++;
+        state.diagnostic_warnings++;
+        if (!m_strict_arrival_warned) begin
+            `uvm_warning("SCB_ACTUAL_FIRST",
+                         "actual input arrived before expected; comparison remains order-independent")
+            m_strict_arrival_warned = 1;
+        end
+    end
+    if (!retained_copy(tr, stream_id, "actual", retained)) return;
+    if (!can_enqueue(state, stream_id, "actual", state.actual_q.size())) return;
+    pending = new(retained, kind);
+    state.actual_q.push_back(pending);
+    m_current_pending++;
+    update_peak(state);
+    case (m_cfg.m_cmp_mode)
+        AIP_SCB_ORDERED_EXACT: reconcile_ordered_exact(state);
+        AIP_SCB_ORDERED_LOSSY: reconcile_ordered_lossy(state);
+        AIP_SCB_UNORDERED:     reconcile_unordered_actual(state);
+        default:           reconcile_unordered_actual(state);
+    endcase
+endfunction
+
+// 功能：登记带稳定 packet_key 的 expected，并按 stream/key 立即匹配 actual。
+// 输入/输出：输入事务、stream、kind 和 packet_key；无返回值。
+// 边界/副作用：空 key 视为配置错误并计入 overflow；同 key 重复项按到达顺序匹配。
+function void aip_scb::push_expected_keyed(
+    TRANS_TYPE tr,
+    stream_id_t stream_id='1,
+    int kind=-1,
+    packet_key_t packet_key=""
+);
+    TRANS_TYPE retained;
+    state_t state;
+    pending_t pending;
+
+    state = state_for(stream_id);
+    m_expected_inputs++;
+    state.expected_inputs++;
+    if (packet_key.len() == 0) begin
+        record_overflow(state, stream_id, "expected", tr, kind);
+        emit_detail(stream_id, "SCB_EMPTY_PACKET_KEY",
+                    "expected packet_key is empty");
+        return;
+    end
+    if (!retained_copy(tr, stream_id, "expected", retained)) return;
+    if (!can_enqueue(state, stream_id, "expected",
+                     state.keyed_expected_count())) return;
+    pending = new(retained, kind, packet_key, 1);
+    state.expected_by_key[packet_key].push_back(pending);
+    m_current_pending++;
+    update_peak(state);
+    reconcile_keyed_expected(state, packet_key);
+endfunction
+
+// 功能：登记带稳定 packet_key 的 actual，并按 stream/key 立即匹配 expected。
+// 输入/输出：输入事务、stream、kind 和 packet_key；无返回值。
+// 边界/副作用：空 key 视为协议错误；actual 先到时保留，expected 后到仍可匹配。
+function void aip_scb::push_actual_keyed(
+    TRANS_TYPE tr,
+    stream_id_t stream_id='1,
+    int kind=-1,
+    packet_key_t packet_key=""
+);
+    TRANS_TYPE retained;
+    state_t state;
+    pending_t pending;
+
+    state = state_for(stream_id);
+    m_actual_inputs++;
+    state.actual_inputs++;
+    if (packet_key.len() == 0) begin
+        record_overflow(state, stream_id, "actual", tr, kind);
+        emit_detail(stream_id, "SCB_EMPTY_PACKET_KEY",
+                    "actual packet_key is empty");
+        return;
+    end
+    if (!retained_copy(tr, stream_id, "actual", retained)) return;
+    if (!can_enqueue(state, stream_id, "actual",
+                     state.keyed_actual_count())) return;
+    pending = new(retained, kind, packet_key, 1);
+    state.actual_by_key[packet_key].push_back(pending);
+    m_current_pending++;
+    update_peak(state);
+    reconcile_keyed_actual(state, packet_key);
+endfunction
+
+function void aip_scb::update_peak(state_t state);
+    longint unsigned depth;
+    depth = state.expected_q.size() + state.actual_q.size();
+    depth += state.keyed_expected_count() + state.keyed_actual_count();
+    if (depth > state.peak_pending)
+        state.peak_pending = depth;
+    if (m_current_pending > m_peak_pending)
+        m_peak_pending = m_current_pending;
+endfunction
+
+function bit aip_scb::compare_items(TRANS_TYPE expected,
+                                           TRANS_TYPE actual,
+                                           int kind,
+                                           output string diff);
+    diff = "";
+    return expected.self_define_do_compare(actual, diff, kind);
+endfunction
+
+function void aip_scb::reconcile_ordered_exact(state_t state);
+    pending_t expected;
+    pending_t actual;
+    string diff;
+    while ((state.expected_q.size() != 0) &&
+           (state.actual_q.size() != 0)) begin
+        expected = state.expected_q.pop_front();
+        actual = state.actual_q.pop_front();
+        if (compare_items(expected.tr, actual.tr, expected.kind, diff))
+            record_match(state, expected, actual, diff);
+        else
+            record_mismatch(state, expected, actual, diff);
+    end
+endfunction
+
+function void aip_scb::reconcile_ordered_lossy(state_t state);
+    int match_index;
+    string diff;
+    while ((state.actual_q.size() != 0) &&
+           (state.expected_q.size() != 0)) begin
+        match_index = -1;
+        foreach (state.expected_q[i]) begin
+            if (compare_items(state.expected_q[i].tr,
+                              state.actual_q[0].tr,
+                              state.expected_q[i].kind,
+                              diff)) begin
+                match_index = i;
+                break;
+            end
+        end
+        if (match_index < 0) return;
+        repeat (match_index)
+            record_drop(state, state.expected_q.pop_front());
+        record_match(state, state.expected_q.pop_front(),
+                     state.actual_q.pop_front(), diff);
+    end
+endfunction
+
+function void aip_scb::reconcile_unordered_expected(state_t state);
+    int match_index;
+    string diff;
+    pending_t expected;
+    pending_t actual;
+    match_index = -1;
+    expected = state.expected_q[state.expected_q.size()-1];
+    foreach (state.actual_q[i]) begin
+        if (compare_items(expected.tr, state.actual_q[i].tr,
+                          expected.kind, diff)) begin
+            match_index = i;
+            break;
+        end
+    end
+    if (match_index >= 0) begin
+        actual = state.actual_q[match_index];
+        void'(state.expected_q.pop_back());
+        state.actual_q.delete(match_index);
+        record_match(state, expected, actual, diff);
+    end
+endfunction
+
+function void aip_scb::reconcile_unordered_actual(state_t state);
+    int match_index;
+    string diff;
+    pending_t actual;
+    pending_t expected;
+    match_index = -1;
+    actual = state.actual_q[state.actual_q.size()-1];
+    foreach (state.expected_q[i]) begin
+        if (compare_items(state.expected_q[i].tr, actual.tr,
+                          state.expected_q[i].kind, diff)) begin
+            match_index = i;
+            break;
+        end
+    end
+    if (match_index >= 0) begin
+        expected = state.expected_q[match_index];
+        void'(state.actual_q.pop_back());
+        state.expected_q.delete(match_index);
+        record_match(state, expected, actual, diff);
+    end
+endfunction
+
+// 功能：匹配一个 keyed expected 与同 key 的 actual。
+// 输入/输出：输入 stream 状态和 packet_key；无返回值。
+// 边界/副作用：同 key 的多项只消费一对；内容错误立即记录，不扫描其他 key。
+function void aip_scb::reconcile_keyed_expected(
+    state_t state,
+    packet_key_t packet_key
+);
+    pending_t expected;
+    pending_t actual;
+    string diff;
+
+    if (!state.expected_by_key.exists(packet_key) ||
+        !state.actual_by_key.exists(packet_key) ||
+        (state.expected_by_key[packet_key].size() == 0) ||
+        (state.actual_by_key[packet_key].size() == 0)) return;
+
+    expected = state.expected_by_key[packet_key].pop_front();
+    actual   = state.actual_by_key[packet_key].pop_front();
+    if (state.expected_by_key[packet_key].size() == 0)
+        state.expected_by_key.delete(packet_key);
+    if (state.actual_by_key[packet_key].size() == 0)
+        state.actual_by_key.delete(packet_key);
+
+    if (compare_items(expected.tr, actual.tr, expected.kind, diff))
+        record_match(state, expected, actual, diff);
+    else
+        record_mismatch(state, expected, actual,
+                        {"packet_key=", packet_key, " ", diff});
+endfunction
+
+// 功能：匹配一个 keyed actual 与同 key 的 expected。
+// 输入/输出：输入 stream 状态和 packet_key；无返回值。
+// 边界/副作用：调用路径与 expected-first 对称，保证两侧任意先到都能匹配。
+function void aip_scb::reconcile_keyed_actual(
+    state_t state,
+    packet_key_t packet_key
+);
+    reconcile_keyed_expected(state, packet_key);
+endfunction
+
+function void aip_scb::publish_result(state_t state,
+                                             pending_t expected,
+                                             pending_t actual,
+                                             bit matched,
+                                             string diff);
+    result_t result;
+    result = new("result");
+    result.stream_id = state.stream_id;
+    result.expected = (expected == null) ? null : expected.tr;
+    result.actual = (actual == null) ? null : actual.tr;
+    result.kind = (expected != null) ? expected.kind
+                                     : ((actual != null) ? actual.kind : -1);
+    result.packet_key = (expected != null) ? expected.packet_key
+                                           : ((actual != null) ? actual.packet_key : "");
+    result.matched = matched;
+    result.diff = diff;
+    m_result_ap.write(result);
+endfunction
+
+function void aip_scb::record_match(state_t state,
+                                           pending_t expected,
+                                           pending_t actual,
+                                           string diff="");
+    if (expected != null) m_current_pending--;
+    if (actual != null) m_current_pending--;
+    state.match_count++;
+    m_matches++;
+    publish_result(state, expected, actual, 1, diff);
+endfunction
+
+function void aip_scb::record_mismatch(state_t state,
+                                              pending_t expected,
+                                              pending_t actual,
+                                              string diff);
+    if (expected != null) m_current_pending--;
+    if (actual != null) m_current_pending--;
+    state.mismatches++;
+    m_mismatches++;
+    publish_result(state, expected, actual, 0, diff);
+    emit_detail(state.stream_id, "SCB_MISMATCH", diff);
+endfunction
+
+function void aip_scb::record_drop(state_t state,
+                                          pending_t expected);
+    if (expected != null) m_current_pending--;
+    state.allowed_drops++;
+    m_allowed_drops++;
+endfunction
+
+function void aip_scb::record_unexpected(state_t state,
+                                                pending_t actual,
+                                                string reason);
+    if (actual != null) m_current_pending--;
+    state.unexpected_actuals++;
+    m_unexpected_actuals++;
+    publish_result(state, null, actual, 0, reason);
+    emit_detail(state.stream_id, "SCB_UNEXPECTED_ACTUAL", reason);
+endfunction
+
+function void aip_scb::record_overflow(state_t state,
+                                              stream_id_t stream_id,
+                                              string side,
+                                              TRANS_TYPE tr,
+                                              int kind);
+    state.overflows++;
+    m_overflows++;
+endfunction
+
+function void aip_scb::emit_detail(stream_id_t stream_id,
+                                          string id,
+                                          string message);
+    state_t state;
+    state = state_for(stream_id);
+    if (m_detail_emitted < m_cfg.m_err_limit) begin
+        m_detail_emitted++;
+        `uvm_error(id, $sformatf("stream=0x%0h %s", stream_id, message))
+    end else begin
+        m_suppressed_details++;
+        state.suppressed_details++;
+    end
+endfunction
+
+function bit aip_scb::row_before(aip_scb_problem_row left,
+                                        aip_scb_problem_row right);
+    if (left.status != right.status) return left.status > right.status;
+    if (left.issue_count != right.issue_count)
+        return left.issue_count > right.issue_count;
+    return left.stream_id < right.stream_id;
+endfunction
+
+function aip_scb_problem_row aip_scb::make_row(state_t state);
+    aip_scb_problem_row row = new();
+    longint unsigned pending_expected = state.expected_q.size();
+    longint unsigned pending_actual = state.actual_q.size();
+    pending_expected += state.keyed_expected_count();
+    pending_actual += state.keyed_actual_count();
+    if ((state.mismatches + state.unexpected_actuals + state.overflows) != 0)
+        row.status = AIP_SCB_FAIL;
+    else if ((state.allowed_drops + state.diagnostic_warnings
+              + pending_expected + pending_actual) != 0)
+        row.status = AIP_SCB_WARN;
+    else
+        row.status = AIP_SCB_PASS;
+    row.stream_id = state.stream_id;
+    row.issue_count = state.issue_count();
+    row.cells = '{
+        aip_scb_status_text(row.status),
+        $sformatf("0x%0h", state.stream_id),
+        $sformatf("%0d", state.match_count),
+        $sformatf("%0d", state.mismatches),
+        $sformatf("%0d", state.allowed_drops),
+        $sformatf("%0d", state.unexpected_actuals),
+        $sformatf("%0d", pending_expected),
+        $sformatf("%0d", pending_actual),
+        $sformatf("%0d", state.overflows),
+        $sformatf("%0d", state.peak_pending)
+    };
+    return row;
+endfunction
+
+function aip_scb_status_e aip_scb::get_status();
+    if ((m_mismatches + m_unexpected_actuals + m_overflows) != 0)
+        return AIP_SCB_FAIL;
+    if ((m_allowed_drops + m_diagnostic_warnings) != 0) return AIP_SCB_WARN;
+    return AIP_SCB_PASS;
+endfunction
+
+function bit aip_scb::is_clean();
+    foreach (m_streams[id]) begin
+        if ((m_streams[id].expected_q.size() != 0)
+            || (m_streams[id].actual_q.size() != 0)
+            || (m_streams[id].keyed_expected_count() != 0)
+            || (m_streams[id].keyed_actual_count() != 0)) return 0;
+    end
+    return get_status() == AIP_SCB_PASS;
+endfunction
+
+function string aip_scb::get_summary();
+    longint unsigned pending_expected = 0;
+    longint unsigned pending_actual = 0;
+    foreach (m_streams[id]) begin
+        pending_expected += m_streams[id].expected_q.size();
+        pending_actual += m_streams[id].actual_q.size();
+        pending_expected += m_streams[id].keyed_expected_count();
+        pending_actual += m_streams[id].keyed_actual_count();
+    end
+    return $sformatf({
+        "status=%s expected=%0d actual=%0d match=%0d mismatch=%0d ",
+        "drop=%0d unexpected=%0d pending_expected=%0d pending_actual=%0d ",
+        "overflow=%0d peak_pending=%0d suppressed=%0d"},
+        aip_scb_status_text(get_status()), m_expected_inputs, m_actual_inputs, m_matches,
+        m_mismatches, m_allowed_drops, m_unexpected_actuals,
+        pending_expected, pending_actual, m_overflows, m_peak_pending,
+        m_suppressed_details);
+endfunction
+
+function void aip_scb::print_report(int limit=-2);
+    aip_scb_problem_row rows[$];
+    aip_scb_reporter reporter = new();
+    string headers[$] = '{"Status", "Stream", "Match", "Mismatch", "Drop",
+                          "Unexpected", "PendExp", "PendAct", "Overflow", "Peak"};
+    bit numeric[$] = '{0, 0, 1, 1, 1, 1, 1, 1, 1, 1};
+    int effective_limit;
+    int shown;
+    int omitted;
+    longint unsigned total_problem = 0;
+
+    effective_limit = (limit == -2) ? m_cfg.m_report_limit : limit;
+    if (effective_limit < -1) begin
+        `uvm_warning("SCB_REPORT_LIMIT",
+                     $sformatf("invalid report limit=%0d; using configured limit=%0d",
+                               effective_limit, m_cfg.m_report_limit))
+        effective_limit = m_cfg.m_report_limit;
+    end
+    foreach (m_streams[id]) begin
+        aip_scb_problem_row row;
+        int insert_at;
+        bit retain_row;
+        row = make_row(m_streams[id]);
+        if (row.issue_count != 0) begin
+            total_problem++;
+            if (effective_limit == -1)
+                rows.push_back(row);
+            else if (effective_limit > 0) begin
+                retain_row = (rows.size() < effective_limit);
+                if (!retain_row)
+                    retain_row = row_before(row, rows[rows.size()-1]);
+                if (retain_row) begin
+                    insert_at = rows.size();
+                    foreach (rows[i]) begin
+                        if (row_before(row, rows[i])) begin
+                            insert_at = i;
+                            break;
+                        end
+                    end
+                    rows.insert(insert_at, row);
+                    if (rows.size() > effective_limit)
+                        void'(rows.pop_back());
+                end
+            end
+        end
+    end
+    if (effective_limit == -1)
+        rows.rsort() with ({item.status, item.issue_count, ~item.stream_id});
+    shown = rows.size();
+    omitted = total_problem - shown;
+    `uvm_info("SCB_REPORT", get_summary(), UVM_NONE)
+    `uvm_info("SCB_REPORT",
+              $sformatf("Problem streams: total=%0d shown=%0d omitted=%0d",
+                        total_problem, shown, omitted), UVM_NONE)
+    if (shown != 0) begin
+        reporter.set_columns(headers, numeric);
+        for (int i=0; i<shown; i++) reporter.add_row(rows[i].cells);
+        `uvm_info("SCB_REPORT", {"\n", reporter.render()}, UVM_NONE)
+    end
+endfunction
+
+function void aip_scb::finalize_pending();
+    if (m_finalized) return;
+    foreach (m_streams[id]) begin
+        state_t state = m_streams[id];
+        if (m_cfg.m_cmp_mode == AIP_SCB_ORDERED_LOSSY) begin
+            while (state.expected_q.size() != 0)
+                record_drop(state, state.expected_q.pop_front());
+        end else begin
+            while (state.expected_q.size() != 0)
+                record_mismatch(state, state.expected_q.pop_front(), null,
+                                "expected transaction has no actual match at check phase");
+        end
+        while (state.actual_q.size() != 0)
+            record_unexpected(state, state.actual_q.pop_front(),
+                              "actual transaction has no expected match at check phase");
+        finalize_keyed_pending(state);
+    end
+    m_finalized = 1;
+endfunction
+
+// 功能：在 check_phase 结束所有 keyed pending，分别报告缺失 expected 和多余 actual。
+// 输入/输出：输入一个 stream 状态；无返回值。
+// 边界/副作用：只清理当前 epoch，不改变全局计数清零策略；重复 key 逐项报告。
+function void aip_scb::finalize_keyed_pending(state_t state);
+    string expected_keys[$];
+    string actual_keys[$];
+    pending_t pending;
+
+    foreach (state.expected_by_key[key]) expected_keys.push_back(key);
+    foreach (state.actual_by_key[key]) actual_keys.push_back(key);
+
+    foreach (expected_keys[i]) begin
+        while (state.expected_by_key.exists(expected_keys[i]) &&
+               (state.expected_by_key[expected_keys[i]].size() != 0)) begin
+            pending = state.expected_by_key[expected_keys[i]].pop_front();
+            record_mismatch(
+                state,
+                pending,
+                null,
+                {"packet_key=", expected_keys[i],
+                 " expected transaction has no actual match at check phase"}
+            );
+        end
+        state.expected_by_key.delete(expected_keys[i]);
+    end
+
+    foreach (actual_keys[i]) begin
+        while (state.actual_by_key.exists(actual_keys[i]) &&
+               (state.actual_by_key[actual_keys[i]].size() != 0)) begin
+            pending = state.actual_by_key[actual_keys[i]].pop_front();
+            record_unexpected(
+                state,
+                pending,
+                {"packet_key=", actual_keys[i],
+                 " actual transaction has no expected match at check phase"}
+            );
+        end
+        state.actual_by_key.delete(actual_keys[i]);
+    end
+endfunction
+
+function void aip_scb::check_phase(uvm_phase phase);
+    super.check_phase(phase);
+    finalize_pending();
+    if (!m_final_status_reported) begin
+        case (get_status())
+            AIP_SCB_FAIL: `uvm_error("SCB_FINAL", get_summary())
+            AIP_SCB_WARN: `uvm_warning("SCB_FINAL", get_summary())
+            default:  `uvm_info("SCB_FINAL", get_summary(), UVM_LOW)
+        endcase
+        m_final_status_reported = 1;
+    end
+endfunction
+
+function void aip_scb::report_phase(uvm_phase phase);
+    super.report_phase(phase);
+    if (m_cfg.m_report_en) print_report();
+    if (m_suppressed_details != 0)
+        `uvm_warning("SCB_SUPPRESSED",
+                     $sformatf("%0d runtime detail messages suppressed (limit=%0d)",
+                               m_suppressed_details, m_cfg.m_err_limit))
+endfunction
+
+function void aip_scb::reset_state(bit clear_counters=1);
+    m_streams.delete();
+    m_finalized = 0;
+    m_final_status_reported = 0;
+    m_strict_arrival_warned = 0;
+    m_current_pending = 0;
+    if (clear_counters) begin
+        m_expected_inputs = 0;
+        m_actual_inputs = 0;
+        m_matches = 0;
+        m_mismatches = 0;
+        m_allowed_drops = 0;
+        m_unexpected_actuals = 0;
+        m_overflows = 0;
+        m_diagnostic_warnings = 0;
+        m_peak_pending = 0;
+        m_detail_emitted = 0;
+        m_suppressed_details = 0;
+    end
+endfunction
+
+task aip_scb::send_rm_trans_to_cmp(TRANS_TYPE rm_tr,
+                                          stream_id_t stream_id='1,
+                                          int kind=-1);
+    push_expected(rm_tr, stream_id, kind);
+endtask
+
+task aip_scb::send_dut_trans_to_cmp(TRANS_TYPE dut_tr,
+                                           stream_id_t stream_id='1,
+                                           int kind=-1);
+    push_actual(dut_tr, stream_id, kind);
+endtask
+
+`endif
