@@ -210,11 +210,19 @@ equal ready_ack_pause $pause_count 1
 _aip_control_pending_end 9
 
 # absolute、无单位、显式 -keep、run 0 及无限 run 的参数语义。
+# helper 推进嵌在 proc 内调用，从不自动加 -keep；run 推进在 TTY 下自动加，补剩余时长时保留。
 reset_fixture
 set now_fs 10000000
 set stops {{20000000 {_aip_control_signal_watch abs_notice 0}}}
 _aip_advance helper -absolute 50ns
 equal absolute_deadline $now_fs 50000000
+equal absolute_helper_remainder [lindex $native_calls 1] 30000000fs
+reset_fixture
+set now_fs 10000000
+set stops {{20000000 {_aip_control_signal_watch abs_notice 0}}}
+_aip_advance run -absolute 50ns
+equal absolute_run_deadline $now_fs 50000000
+equal absolute_run_first [lindex $native_calls 0] {-keep -absolute 50ns}
 equal absolute_remainder [lindex $native_calls 1] {-keep 30000000fs}
 reset_fixture
 _aip_advance run 10

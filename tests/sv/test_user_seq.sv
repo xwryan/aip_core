@@ -22,11 +22,14 @@ class user_seq extends uvm_sequence #(user_item);
         super.new(name);
     endfunction
 
+    // status=N 只写非零 status 不写文本；text=T 自写结果文本；api=1 经 aip_cmd_seq_registry::set_result 报失败。
     task body();
         aip_cmd h;
         user_item item;
         string args;
         string enable_s;
+        string status_s;
+        string text_s;
 
         h = aip_cmd::get_handle("user_seq_run");
         args = (h == null) ? "" : h.args_in;
@@ -42,6 +45,13 @@ class user_seq extends uvm_sequence #(user_item);
         item.tag = last_tag;
         start_item(item);
         finish_item(item);
+
+        status_s = aip_cmd::get_arg(args, "status");
+        text_s = aip_cmd::get_arg(args, "text");
+        if (h != null && status_s != "") h.status = aip_cmd::parse_int_arg(status_s, 0);
+        if (h != null && text_s != "") h.result_out = text_s;
+        if (aip_cmd::get_arg(args, "api") == "1")
+            void'(aip_cmd_seq_registry::set_result(this, 4, "ERROR: user_seq_run rejected via set_result"));
     endtask
 endclass
 

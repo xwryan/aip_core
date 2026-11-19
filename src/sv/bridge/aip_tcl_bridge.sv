@@ -35,7 +35,7 @@ reg __tcl_cmd_trigger = 0;
 reg [31:0] __tcl_cmd_id    = 0;
 reg [31:0] __tcl_result_id = 0;
 
-// 已注册命令名表 (逗号分隔). bridge 启动时写入, 注册表变化 (aip_reg_seq 等运行时注册/注销) 后重写;
+// 已注册命令名表 (逗号分隔). bridge 启动时写入, 注册表变化 (aip_bind_seq 等运行时注册/注销) 后重写;
 // TCL get 后门读 (零握手) 缓存成 dict, 用于未注册命令快速失败. 4096 字符够装上百条.
 reg [31:0] __tcl_cmd_names_ascii [0:4095];
 reg [31:0] __tcl_cmd_names_len = 0;
@@ -124,7 +124,7 @@ class aip_tcl_bridge;
         __tcl_cmd_names_gen = __tcl_cmd_names_gen + 1;
     endfunction
 
-    // 注册表变化后才重写：aip_reg_seq 注册/注销时立即调用，run_loop 每条命令 ACK 前兜底。
+    // 注册表变化后才重写：aip_bind_seq 注册/注销时立即调用，run_loop 每条命令 ACK 前兜底。
     static function void sync_cmd_names();
         if (names_registry_version != __aip_cmd_registry_version) publish_cmd_names();
     endfunction

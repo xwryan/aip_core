@@ -25,6 +25,25 @@ set state [aip_read_result]
 check "sequence owns enable=0" [expr {[string match "runs=2 enable=0 tag=ep_cfg*" $state]}]
 check "driver received second item" [expr {[string match "*driver_enable=0 driver_tag=ep_cfg" $state]}]
 
+puts "\n=== U3: status-only failure gets ERROR text, never OK ==="
+user_seq_run status=7 tag=fail_only
+check "status-only status kept" [expr {[aip_check_status] == 7}]
+check "status-only text is ERROR" [expr {[aip_read_result] eq "ERROR: user_seq_run status=7"}]
+
+puts "\n=== U4: seq-set text returned as is ==="
+user_seq_run status=3 text=CUSTOM_FAIL
+check "custom text status kept" [expr {[aip_check_status] == 3}]
+check "custom text kept" [expr {[aip_read_result] eq "CUSTOM_FAIL"}]
+
+puts "\n=== U5: set_result API works for user sequences ==="
+user_seq_run api=1
+check "set_result status" [expr {[aip_check_status] == 4}]
+check "set_result text" [expr {[aip_read_result] eq "ERROR: user_seq_run rejected via set_result"}]
+
+puts "\n=== U6: status 0 without text stays OK ==="
+user_seq_run tag=ok_again
+check "default OK unchanged" [expr {[aip_check_status] == 0 && [aip_read_result] eq "OK: user_seq_run"}]
+
 puts "\n=========================================="
 puts "  PASS: $pass  FAIL: $fail  TOTAL: [expr {$pass+$fail}]"
 puts "=========================================="

@@ -1,4 +1,4 @@
-# aip_reg_seq 快照回归的共用 loader 与断言（runner 注入 AIP_CORE/RSCK_*）；restore 删除 proc 后须重新 source 本文件。
+# aip_bind_seq 快照回归的共用 loader 与断言（runner 注入 AIP_CORE/RSCK_*）；restore 删除 proc 后须重新 source 本文件。
 if {$::env(RSCK_LOADER) eq "so"} {
     source [file join $::env(AIP_CORE) dist aip_init_so.tcl]
 } else {

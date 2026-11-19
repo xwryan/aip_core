@@ -24,7 +24,7 @@ AIP_TEST_INCDIRS := +incdir+../.. +incdir+../../src/sv +incdir+../../src/sv/core
 .PHONY: all help test_reg_seq test_user_seq test_soload test_tcl_watchdog test_checkpoint_wait_tcl test_checkpoint_wait_vcs test_checkpoint_restore test_end_checker_registry test_cmdline_negative test_cmdline_container_syntax test_cmdline_print_control test_cmdline_wide test_cmdline_array_random test_cmdline_struct_schema_scalar test_cmdline_struct_schema_containers test_cmdline_struct_schema_typed_postprocess test_cmdline_struct_schema_nested test_cmdline_struct_schema_nested_canonical test_cmdline_struct_schema_final_review test_cmdline_struct_schema_queue test_cmdline_struct_schema_integration test_cmdline_struct_schema_negative test_cmdline_strict_queue test_cmdline_struct_schema_lifecycle test_cmdline_struct_schema_width_fail test_cmdline_struct_schema_primitive_arrays test_cmdline_struct_schema_size_budget test_cmdline_struct_schema test_core_package test_core_package_preinclude test_cpu_bridge test_cseq_arbitration test_c_bridge_socket test_dut_control test_str_delim test_cmd_str_result test_x_watch_vcs clean
 .PHONY: test_cmdline_zero_weight test_cmdline_diagnostics
 .PHONY: test_cmd_wait test_cmd_ack_progress test_wait_policy test_cmdline_query test_parse_uint_arg test_aip_flags
-.PHONY: test_seq_registry_active test_aip_reg_seq test_aip_reg_seq_checkpoint
+.PHONY: test_seq_registry_active test_aip_bind_seq test_aip_bind_seq_checkpoint
 .PHONY: test_scb test_mon_hub
 .PHONY: test_reg_wide
 .PHONY: test_cmd_result_context
@@ -91,8 +91,8 @@ help:
 	@echo "  test_parse_uint_arg (strict unsigned command arguments: default, negative, non-numeric, max)"
 	@echo "  test_aip_flags (enum bit flags by name or mask: plusarg, set_param, hierarchy, fatal on unknown names)"
 	@echo "  test_seq_registry_active (aip_cmd_seq_registry::active: running, unregistered, killed owner, stale entry)"
-	@echo "  test_aip_reg_seq (Tcl aip_reg_seq/aip_unreg_seq: count/time/wait=0, fork, BUSY, param_path, kill/watchdog, errors; source+.so)"
-	@echo "  test_aip_reg_seq_checkpoint (runtime-registered commands across save/restore in a new process; source+.so)"
+	@echo "  test_aip_bind_seq (Tcl aip_bind_seq/aip_unbind_seq, seq results, strict count, time= limit, aip_sqr_registry, errors; source+.so)"
+	@echo "  test_aip_bind_seq_checkpoint (runtime-registered commands across save/restore in a new process; source+.so)"
 	@echo "  test_scb (aip_scb ordered/lossy/unordered/keyed matching and the 14-case report-limit matrix)"
 	@echo "  test_mon_hub (aip_mon_hub/aip_sample_seq: per-subscriber copies, blocking/timeout, reset, overflow, readers)"
 	@echo "  test_cmd_wait (per-command async wait=0 and synchronous default)"
@@ -304,35 +304,39 @@ test_user_seq:
 	    -o simv_user_seq \
 	    -Mdir=csrc_user_seq \
 	    test_user_seq.sv
-	cd $(TEST_SV_DIR) && ./simv_user_seq -ucli -do ../tcl/test_user_seq.tcl
+	cd $(TEST_SV_DIR) && ./simv_user_seq -ucli -do ../tcl/test_user_seq.tcl > user_seq.log 2>&1 \
+	    || { cat user_seq.log; exit 1; }
+	cd $(TEST_SV_DIR) && cat user_seq.log && grep -Fxq USER_SEQ_PASS user_seq.log && ! grep -q '^\[FAIL\]' user_seq.log
 
-# Tcl 运行时注册 seq 命令（aip_reg_seq/aip_unreg_seq）：同一脚本分别经源码与 .so loader 运行；
+# Tcl 运行时绑定 seq 命令（aip_bind_seq/aip_unbind_seq）：同一脚本分别经源码与 .so loader 运行；
 # Tcl/SV 双标记，另核对 help 列表中的运行时命令分组与绑定描述。
-test_aip_reg_seq:
+test_aip_bind_seq:
 	$(MAKE) -C dist tcl
 	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps \
-	    -debug_access+r+w+f -full64 -lca $(AIP_TEST_INCDIRS) -top test_aip_reg_seq \
-	    -o simv_aip_reg_seq -Mdir=csrc_aip_reg_seq test_aip_reg_seq.sv
+	    -debug_access+r+w+f -full64 -lca $(AIP_TEST_INCDIRS) -top test_aip_bind_seq \
+	    -o simv_aip_bind_seq -Mdir=csrc_aip_bind_seq test_aip_bind_seq.sv
 	cd $(TEST_SV_DIR) && set -e; for loader in source so; do \
-	    log=aip_reg_seq_$$loader.log; \
-	    AIP_CORE=$(CURDIR) AIP_REG_SEQ_LOADER=$$loader timeout 300s ./simv_aip_reg_seq -no_save -ucli \
-	        -do ../tcl/test_aip_reg_seq.tcl +UVM_NO_RELNOTES > $$log 2>&1 || { cat $$log; exit 1; }; \
-	    if ! grep -Eq '^REG_SEQ_TCL_PASS checks=[0-9]+$$' $$log \
-	        || ! grep -Fxq REG_SEQ_SV_PRECHECK_PASS $$log \
-	        || ! grep -Eq '^REG_SEQ_SV_PASS a=[0-9]+ b=[0-9]+$$' $$log \
-	        || ! grep -Fxq '[aip_reg_seq]' $$log \
+	    log=aip_bind_seq_$$loader.log; \
+	    AIP_CORE=$(CURDIR) AIP_BIND_SEQ_LOADER=$$loader timeout 300s ./simv_aip_bind_seq -no_save -ucli \
+	        -do ../tcl/test_aip_bind_seq.tcl +UVM_NO_RELNOTES > $$log 2>&1 || { cat $$log; exit 1; }; \
+	    if ! grep -Eq '^BIND_SEQ_TCL_PASS checks=[0-9]+$$' $$log \
+	        || ! grep -Fxq BIND_SEQ_SV_PRECHECK_PASS $$log \
+	        || ! grep -Eq '^BIND_SEQ_SV_PASS a=[0-9]+ b=[0-9]+$$' $$log \
+	        || ! grep -Fxq '[aip_bind_seq]' $$log \
 	        || ! grep -Eq '^  rs_p1 +- type=rs_path_seq sqr=uvm_test_top\.env\.a\.sqr path=rs\.p1$$' $$log \
+	        || ! grep -Eq '^  rs_a +uvm_test_top\.env\.a\.sqr$$' $$log \
+	        || ! grep -Eq '^  rs_b +uvm_test_top\.env\.b\.sqr$$' $$log \
 	        || ! grep -Eq '^UVM_ERROR[[:space:]]*:[[:space:]]*0[[:space:]]*$$' $$log \
 	        || ! grep -Eq '^UVM_FATAL[[:space:]]*:[[:space:]]*0[[:space:]]*$$' $$log \
-	        || grep -Eq '^REG_SEQ_FAIL|^Error-|no ack after' $$log; then \
-	        cat $$log; echo "test_aip_reg_seq failed (loader=$$loader)"; exit 1; \
+	        || grep -Eq '^BIND_SEQ_FAIL|^Error-|no ack after' $$log; then \
+	        cat $$log; echo "test_aip_bind_seq failed (loader=$$loader)"; exit 1; \
 	    fi; \
-	    grep -E '^REG_SEQ_(TCL|SV)_PASS' $$log; \
+	    grep -E '^BIND_SEQ_(TCL|SV)_PASS' $$log; \
 	done
 
-# 运行时注册命令随快照保存/恢复：新进程 restore 后核对注册表、Tcl 命令名表重读与命令行为；源码/.so 两种 loader。
-test_aip_reg_seq_checkpoint:
-	CKPT_TIMEOUT=$(CKPT_TIMEOUT) CKPT_ATTEMPTS=$(CKPT_ATTEMPTS) bash tests/checkpoint/run_reg_seq.sh
+# 运行时绑定的 seq 命令随快照保存/恢复：新进程 restore 后核对注册表、Tcl 命令名表重读与命令行为；源码/.so 两种 loader。
+test_aip_bind_seq_checkpoint:
+	CKPT_TIMEOUT=$(CKPT_TIMEOUT) CKPT_ATTEMPTS=$(CKPT_ATTEMPTS) bash tests/checkpoint/run_bind_seq.sh
 
 # set_param 表达式须与 plusarg 共用语义并经真实 Tcl/UCLI 验证；Python runner 保留每条负例日志。
 .PHONY: test_set_param_expressions bench_set_param_build
@@ -1476,9 +1480,9 @@ clean:
 	rm -rf $(TEST_SV_DIR)/simv_end_checker $(TEST_SV_DIR)/simv_end_checker.daidir $(TEST_SV_DIR)/csrc_end_checker
 	rm -f $(TEST_SV_DIR)/end_checker_*.log $(TEST_SV_DIR)/ucli.key $(TEST_SV_DIR)/vc_hdrs.h
 	rm -rf $(TEST_SV_DIR)/simv_reg_seq $(TEST_SV_DIR)/simv_reg_seq.daidir $(TEST_SV_DIR)/csrc_reg_seq
-	rm -rf $(TEST_SV_DIR)/simv_user_seq $(TEST_SV_DIR)/simv_user_seq.daidir $(TEST_SV_DIR)/csrc_user_seq
-	rm -rf $(TEST_SV_DIR)/simv_aip_reg_seq $(TEST_SV_DIR)/simv_aip_reg_seq.daidir $(TEST_SV_DIR)/csrc_aip_reg_seq
-	rm -f $(TEST_SV_DIR)/aip_reg_seq_*.log
+	rm -rf $(TEST_SV_DIR)/simv_user_seq $(TEST_SV_DIR)/simv_user_seq.daidir $(TEST_SV_DIR)/csrc_user_seq $(TEST_SV_DIR)/user_seq.log
+	rm -rf $(TEST_SV_DIR)/simv_aip_bind_seq $(TEST_SV_DIR)/simv_aip_bind_seq.daidir $(TEST_SV_DIR)/csrc_aip_bind_seq
+	rm -f $(TEST_SV_DIR)/aip_bind_seq_*.log
 	rm -rf $(TEST_SV_DIR)/simv_cmd_wait $(TEST_SV_DIR)/simv_cmd_wait.daidir $(TEST_SV_DIR)/csrc_cmd_wait
 	rm -f $(TEST_SV_DIR)/cmd_wait.log
 	rm -rf $(TEST_SV_DIR)/simv_cmd_ack_progress $(TEST_SV_DIR)/simv_cmd_ack_progress.daidir $(TEST_SV_DIR)/csrc_cmd_ack_progress
@@ -1545,5 +1549,5 @@ ci-cmd:
 	$(MAKE) test_inject_queue
 	$(MAKE) test_cmd_str_result test_cmd_result_context test_cmd_compat test_cmd_wait test_cmd_ack_progress
 	$(MAKE) test_dut_control test_c_bridge_socket test_user_seq test_tcl_watchdog test_cseq_arbitration test_seq_registry_active
-	$(MAKE) test_aip_reg_seq
+	$(MAKE) test_aip_bind_seq
 	$(MAKE) test_checkpoint_background

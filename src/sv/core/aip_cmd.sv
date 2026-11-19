@@ -302,6 +302,33 @@ class aip_cmd_seq_registry;
             if (__aip_active_seq_owners[name] == owner) return 1;
         return 0;
     endfunction
+
+    // seq 取启动它的命令：沿父 seq 链找最近的已登记 seq（子 seq 也能找到）；不在命令中运行时返回 null。
+    static function aip_cmd command_of(uvm_sequence_base seq);
+        uvm_sequence_base current = seq;
+        while (current != null) begin
+            foreach (__aip_active_seqs[name])
+                if (__aip_active_seqs[name] == current) return aip_cmd::get_handle(name);
+            current = current.get_parent_sequence();
+        end
+        return null;
+    endfunction
+
+    // 启动命令的参数（框架 wait 已剥离）；不在命令中运行时返回空串。
+    static function string args_of(uvm_sequence_base seq);
+        aip_cmd handle = command_of(seq);
+        return (handle == null) ? "" : handle.args_in;
+    endfunction
+
+    // seq 报告命令结果（如拒绝非法参数）：写启动命令的 status/result_out，启动流程收尾时不再覆盖；
+    // 不在命令中运行时返回 0，调用方自行报 uvm_error。
+    static function bit set_result(uvm_sequence_base seq, int status, string text);
+        aip_cmd handle = command_of(seq);
+        if (handle == null) return 0;
+        handle.status = status;
+        handle.result_out = text;
+        return 1;
+    endfunction
 endclass
 
 
@@ -2490,9 +2517,10 @@ class \__aip_cmd_``Ccmd extends aip_cmd_user_task; \
 endclass
 
 // Binds a seq type + sequencer to a command. The seq needs `int count`; transaction fields come
-// from aip_cmdline. Time mode sets count to max and kills the seq at expiry (no driver rollback).
+// from aip_cmdline. Time mode sets count to max and kills the seq at expiry if it is still running
+// (no driver rollback); count= must be an unsigned integer 0..0x7fffffff.
 //   `aip_cmd_seq(axi_write, axi_wr_seq, virtual_sqr::axi_wr_sqr)  ->  axi_write count=10 | time=1us
-// 启动流程与 Tcl aip_reg_seq 共用 aip_seq_launcher::run（core/aip_seq_launcher.sv）；本类只负责创建并写 count。
+// 启动流程与 Tcl aip_bind_seq 共用 aip_seq_launcher::run（core/aip_seq_launcher.sv）；本类只负责创建并写 count。
 `define aip_cmd_seq(cmd_name, seq_type, sequencer) \
 class \__aip_seq_``cmd_name extends aip_seq_launcher; \
     function new(); super.new(`"seq_type`", 1'b0, `__FILE__, `__LINE__); endfunction \
@@ -2510,7 +2538,8 @@ endclass \
 
 //   `aip_cmd_user_seq(link_up, my_link_up_seq, my_vsqr::pcie_sqr)
 // The seq reads aip_cmd::get_handle("link_up").args_in and sets its own fields (e.g. SVT `enable`);
-// the framework only starts it, tracks it for kill_seq/watchdog and defaults the result to OK.
+// the framework only starts it, tracks it for kill_seq/watchdog and defaults an empty result to OK
+// (ERROR: <cmd> status=S when the seq set only a non-zero status, same rule as aip_seq_launcher::run).
 `define aip_cmd_user_seq(cmd_name, seq_type, sequencer) \
 class \__aip_user_seq_``cmd_name ; \
     static task launch(); \
@@ -2533,7 +2562,8 @@ class \__aip_user_seq_``cmd_name ; \
         aip_cmd_seq_registry::unregister(`"cmd_name`"); \
         aip_activity::tick(); \
         if (__h.result_out == "") \
-            __h.result_out = $sformatf("OK: %s", `"cmd_name`"); \
+            __h.result_out = (__h.status == 0) ? $sformatf("OK: %s", `"cmd_name`") : \
+                             $sformatf("ERROR: %s status=%0d", `"cmd_name`", __h.status); \
         `aip_info(("[USER_SEQ] %s done", `"cmd_name`")); \
     endtask \
 endclass \

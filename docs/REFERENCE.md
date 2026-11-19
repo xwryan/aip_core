@@ -148,7 +148,7 @@ dist/                   # 发布 Makefile、aip_init_so.tcl 和产物目录
 | `src/sv/util/aip_clk.sv` | 高精度时钟生成器；interface/class 保持 compilation-unit scope | aip_log, aip_time |
 | `src/sv/core/aip_cmdline.sv` | 命令行参数解析器；支持按完整参数键限制注册日志次数 | aip_str, uvm_pkg |
 | `src/sv/core/aip_cmd.sv` | 命令分发框架（核心） | aip_str |
-| `src/sv/core/aip_seq_launcher.sv` | seq 启动器（`aip_cmd_seq`/`aip_cmd_cseq` 与运行时命令共用的 count/time 启动流程）、`aip_seq_type`/`aip_seq_type_path` 类型声明、Tcl `aip_reg_seq`/`aip_unreg_seq` | aip_cmd, aip_tcl_bridge |
+| `src/sv/core/aip_seq_launcher.sv` | seq 启动器（`aip_cmd_seq`/`aip_cmd_cseq` 与运行时命令共用的 count/time 启动流程、seq 结果）、`aip_seq_type`/`aip_seq_type_path` 类型声明、`aip_sqr_registry` 名字表、Tcl `aip_bind_seq`/`aip_unbind_seq`/`aip_sqr_list` | aip_cmd, aip_tcl_bridge |
 | `src/sv/bridge/aip_cpu_bridge.sv` | SV↔C mailbox 桥 + IRQ ACK monitor (v2 协议) | aip_log |
 | `src/sv/util/aip_mem_ecc.sv` | ECC/parity 后门内存读写 (parity/secded/crc8) | aip_log, aip_cpu_bridge |
 | `src/sv/bridge/aip_c_bridge.sv` | Socket/DPI-C 命令桥接 | aip_cmd, src/c/runtime/sv_socket_dpi.c |
@@ -252,7 +252,7 @@ make test_c_bridge_checkpoint # 新进程恢复未监听快照，再显式开启
 make test_dut_control       # dut_force/deposit/get/release/force_time/readmem — VCS
 make test_scb               # aip_scb 匹配语义与 14 组报告上限矩阵 — VCS
 make test_mon_hub           # aip_mon_hub/aip_sample_seq 订阅、超时、复位、溢出、读者 — VCS
-make test_aip_reg_seq       # Tcl aip_reg_seq/aip_unreg_seq 运行时注册，源码/.so 两种 loader — VCS + gcc
+make test_aip_bind_seq       # aip_bind_seq/aip_unbind_seq、seq 结果、严格 count、time= 上限、aip_sqr_registry，源码/.so — VCS + gcc
 make -C dist test-ucli-so   # dist/aip_init_so.tcl + UCLI -do smoke — VCS + gcc
 ```
 
@@ -613,7 +613,9 @@ warning。每次运行时调用 `configure` 或 `set_cmdline_print` 都会清空
 //   默认:       axi_write                — 发 1 个 trans
 // 支持时间单位: fs, ps, ns, us, ms, s
 //
-// time 模式原理: seq.count 设为最大值, fork seq + timer join_any, 超时后 disable seq
+// time 模式原理: seq.count 设为最大值, fork seq + timer join_any, 到期仍在运行才 kill；seq 先结束即返回、不再 kill
+// count 须为 0..0x7fffffff 的无符号整数：count=two / 负数 / 超范围 → ERROR: <cmd>: count=...，不启动 seq
+// sequencer 表达式启动时为 null → ERROR: <cmd>: sequencer is null ...，不启动 seq
 
 // --- 寄存器 R/W seq 注册宏 — inline 传参 + 回读返回 ---
 `aip_cmd_reg(reg_acc, reg_seq, virtual_sqr::reg_sqr)
@@ -646,25 +648,39 @@ warning。每次运行时调用 `configure` 或 `set_cmdline_print` 都会清空
 // aip_cmd_seq/aip_cmd_cseq 的 count/time 启动流程在 aip_seq_launcher::run（core/aip_seq_launcher.sv），
 // 宏只生成创建 seq 并写 count 的启动器；日志仍指向宏所在的用户源码行。
 
-// --- 运行时注册（不重编译）：SV 每种类型声明一行，Tcl 绑定到 sequencer 生成新命令 ---
+// --- 运行时绑定（不重编译）：SV 每种类型声明一行，Tcl 绑定到 sequencer 生成新命令 ---
 `aip_seq_type(axi_wr_seq)          // T 须 `uvm_object_utils 且有 int count
 `aip_seq_type_path(vio_tx_seq)     // 另有 string param_path，只有这种类型接受 path=
-// Tcl：aip_reg_seq cmd=<新名> type=<宏参数原文> sqr=<sequencer UVM 全名> [path=<参数路径>]
-//   aip_reg_seq cmd=vio_tx_p1 type=vio_tx_seq sqr=uvm_test_top.env.vio.p1.sqr path=vio.tx.p1
+// Tcl：aip_bind_seq cmd=<新名> type=<宏参数原文> sqr=<sequencer UVM 全名> [path=<参数路径>]
+//   aip_bind_seq cmd=vio_tx_p1 type=vio_tx_seq sqr=uvm_test_top.env.vio.p1.sqr path=vio.tx.p1
 //   vio_tx_p1 count=1000 | time=1us [wait=0]   → OK: vio_tx_p1 count=1000（同 aip_cmd_seq）
-//   aip_unreg_seq cmd=vio_tx_p1                → 只注销 aip_reg_seq 生成且空闲的命令
-// 生成的命令类 aip_reg_seq_cmd（aip_cmd_user_task 派生）：BUSY、kill_seq/watchdog、help 分组 [aip_reg_seq]
+//   aip_unbind_seq cmd=vio_tx_p1                → 只注销 aip_bind_seq 生成且空闲的命令
+// 生成的命令类 aip_bind_seq_cmd（aip_cmd_user_task 派生）：BUSY、kill_seq/watchdog、help 分组 [aip_bind_seq]
 // 与编译期命令一致；启动前写 seq.count，给了 path= 才写 seq.param_path（create 之后写，参数须在 body 中读）。
 // 报错（ERROR/status=1，不覆盖、不新建）：缺 cmd=/type=/sqr=、未知/重复/空值的键、名字已存在或非法
 // （字母/_ 开头，只含字母数字和 _ . : -，fork 保留）、类型未声明、sqr 找不到或不是 uvm_sequencer_base、
 // 对 aip_seq_type 类型给 path=。Tcl proc 另拒绝与 Tcl 已有命令同名、多行 fork 块内注册。注入队列拒绝这两条命令。
 // SV 侧同样可用：
-//   aip_reg_seq_cmd cmd; string why;
-//   if (!aip_reg_seq_cmd::register("vio_tx_p1", "vio_tx_seq", "uvm_test_top.env.vio.p1.sqr", "vio.tx.p1", cmd, why))
+//   aip_bind_seq_cmd cmd; string why;
+//   if (!aip_bind_seq_cmd::register("vio_tx_p1", "vio_tx_seq", "uvm_test_top.env.vio.p1.sqr", "vio.tx.p1", cmd, why))
 //       `uvm_error("REG", why)
 //   aip_seq_launcher::find("vio_tx_seq")       // 已声明类型的启动器；未声明返回 null
 // 命令名表：注册/注销后 aip_tcl_bridge::sync_cmd_names() 重写 __tcl_cmd_names_* 并递增 __tcl_cmd_names_gen，
 // Tcl 缓存版本不同即重读；快照恢复后注册表与名表一起回到快照时刻，重新 source 加载脚本时重读。
+
+// --- seq 内取启动命令 / 报告结果（aip_cmd_seq、aip_cmd_cseq、aip_bind_seq、aip_cmd_user_seq 启动的 seq 及其子 seq）---
+//   aip_cmd h  = aip_cmd_seq_registry::command_of(this);   // 沿父 seq 链找；不在命令中运行时 null
+//   string a   = aip_cmd_seq_registry::args_of(this);      // 命令参数（wait 已剥离）
+//   bit ok     = aip_cmd_seq_registry::set_result(this, 1, "ERROR: len out of range");  // 不在命令中运行时 0
+// launcher 收尾：seq 写过的 result_out 原样返回；没写且 status=0 → OK: <cmd> count=N|time=T；
+// 只写了非零 status → ERROR: <cmd> count=N status=S。
+
+// --- sequencer 名字表 aip_sqr_registry（env 在 connect_phase 登记）---
+//   aip_sqr_registry::set("vio_h0_pf0", pf0_sqr);   // 同名同对象幂等；同名异对象/非法名/null → UVM_ERROR AIP_SQR_REGISTRY
+//   aip_sqr_registry::exists("vio_h0_pf0");
+//   aip_sqr_registry::get("vio_h0_pf0");            // 未登记 → UVM_ERROR（列出已登记名）并返回 null
+//   `aip_cmd_seq(vio_tx, vio_tx_seq, aip_sqr_registry::get("vio_h0_pf0"))   // 启动时求值
+// Tcl：aip_bind_seq ... sqr=vio_h0_pf0（先查名字表再按 UVM 全名）；aip_sqr_list 打印 名字 + 全名，结果 OK: N sequencer(s)
 
 // --- 时间字符串解析（SV 内部可用）---
 // real ns = aip_cmd::parse_time_ns("1us");    // → 1000.0
@@ -752,7 +768,7 @@ endmodule
 - `aip_core_pkg::__tcl_result_known` — `1` 表示命令由 SV registry/内建 `fork` 识别；`0` 表示未找到
 - `aip_core_pkg::__tcl_activity_count` — `aip_activity::tick()` 计数的只读镜像，Tcl ACK 等待据此判断进展
 - `aip_core_pkg::__tcl_cmd_watchdog_stall_ns` / `__tcl_cmd_watchdog_poll_ns` — 生效的停滞看门狗配置（ns，禁用时 stall=0），每条命令受理时重发
-- `aip_core_pkg::__tcl_cmd_names_ascii[0:4095]` / `__tcl_cmd_names_len` — 逗号分隔的已注册命令名表，启动时写入，注册表变化（`aip_reg_seq`、插件加载等）后重写；Tcl `unknown` 据此快速失败，表满（可能截断）时 Tcl 不建缓存、全部交 SV 判定
+- `aip_core_pkg::__tcl_cmd_names_ascii[0:4095]` / `__tcl_cmd_names_len` — 逗号分隔的已注册命令名表，启动时写入，注册表变化（`aip_bind_seq`、插件加载等）后重写；Tcl `unknown` 据此快速失败，表满（可能截断）时 Tcl 不建缓存、全部交 SV 判定
 - `aip_core_pkg::__tcl_cmd_names_gen` — 命令名表版本，每次重写加 1；Tcl 缓存版本不同即重读
 
 这些对象属于 `aip_core_pkg`。随库提供的 `aip_cmd.tcl` 和 `aip_checkpoint.tcl` 已在
@@ -794,7 +810,7 @@ result 总先于 Tcl 放弃到达；看门狗禁用时由 `::aip_ack_timeout_ns`
 | 长 seq（发很多包 / 跑 > 50us） | ✅ **必须周期 tick** | 否则整段执行 count 不变 → 被误判死锁 → 误杀 |
 | 死锁 seq（等永不来的 response） | —— | 无 tick 正是判据，本就该被杀 |
 
-> ⚠️ `aip_cmd_seq` / `aip_cmd_reg` 宏（及 `aip_reg_seq` 生成的命令）**只在 seq 完全跑完后 tick 一次**，执行中途不 tick。所以跑时长超过 stall 阈值的长 seq，必须在下面某处自己周期喂狗，否则会被误杀。
+> ⚠️ `aip_cmd_seq` / `aip_cmd_reg` 宏（及 `aip_bind_seq` 生成的命令）**只在 seq 完全跑完后 tick 一次**，执行中途不 tick。所以跑时长超过 stall 阈值的长 seq，必须在下面某处自己周期喂狗，否则会被误杀。
 
 **在哪里 tick（推荐 driver 层，一处改全部受益）**：
 
@@ -996,10 +1012,10 @@ join_none                             ;# 不等待，后台运行
 # 单行 fork 也支持：
 fork axi_write count=5, eth_send count=3 join
 
-# 运行时注册 seq 命令（类型须先用 `aip_seq_type/`aip_seq_type_path 声明）：
-aip_reg_seq cmd=eth_send_p1 type=eth_send_seq sqr=uvm_test_top.env.eth1.sqr path=eth.p1
+# 运行时绑定 seq 命令（类型须先用 `aip_seq_type/`aip_seq_type_path 声明）：
+aip_bind_seq cmd=eth_send_p1 type=eth_send_seq sqr=uvm_test_top.env.eth1.sqr path=eth.p1
 fork eth_send count=5, eth_send_p1 count=5 join
-aip_unreg_seq cmd=eth_send_p1              ;# 可选，只注销空闲的运行时命令
+aip_unbind_seq cmd=eth_send_p1              ;# 可选，只注销空闲的运行时命令
 # 失败返回 ERROR 且 aip_check_status==1；成功后 Tcl 立即同步命令名表，新名字直接可用
 
 # Seq 时间模式 — 按时长发包：
@@ -2216,7 +2232,7 @@ finish_item   → driver      → 驱动 DUT，等 item_done
 `aip_cmd_info(my_write, "pkt", "Write packets", "count:int or time:str")
 
 // 或只声明类型，由 Tcl 运行时绑定 sequencer（每个实例一条命令，无需重编译）：
-`aip_seq_type(my_write_seq)        // Tcl: aip_reg_seq cmd=my_write1 type=my_write_seq sqr=uvm_test_top.env.wr1.sqr
+`aip_seq_type(my_write_seq)        // Tcl: aip_bind_seq cmd=my_write1 type=my_write_seq sqr=uvm_test_top.env.wr1.sqr
 ```
 
 ### 第四步：TCL 中使用
@@ -2249,7 +2265,7 @@ join
 | `count` 字段 | 必须是 `int count`，宏通过它控制发包数 |
 | `create` vs `start_item` | `create` 调用 `new()` 读参数；`start_item` 只做仲裁，不创建 |
 | 参数读取时机 | 每次 `create` 都重新读取 override 表，保证参数实时生效 |
-| time 模式原理 | `count` 设为 MAX，`fork seq + timer join_any`，超时 `disable` seq |
+| time 模式原理 | `count` 设为 MAX，`fork seq + timer join_any`，到期仍在运行才 kill；seq 先结束即返回 |
 | `set_param` 安全性 | `$stop/run` 握手保证 TCL 改参和 SV 读参不会同时发生 |
 | 嵌套 path | trans 的 `aip_int` path 支持多级: `"eth.ipv4.tcp"` |
 

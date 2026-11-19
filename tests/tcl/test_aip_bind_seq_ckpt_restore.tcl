@@ -1,15 +1,15 @@
 # 新 simv 进程恢复 generate 快照：快照前注册的命令随 SV 状态恢复，恢复前本进程注册的命令随之消失；
 # restore 在顶层执行，之后重新 source 定义。
-source [file join $::env(AIP_CORE) tests tcl test_aip_reg_seq_ckpt_common.tcl]
+source [file join $::env(AIP_CORE) tests tcl test_aip_bind_seq_ckpt_common.tcl]
 set A uvm_test_top.env.a.sqr
 set B uvm_test_top.env.b.sqr
 run 10ns
-set r [aip_reg_seq cmd=rs_pre type=rs_plain_seq sqr=$A]
+set r [aip_bind_seq cmd=rs_pre type=rs_plain_seq sqr=$A]
 rsck_check "register before restore" [expr {[aip_check_status] == 0}]
 rs_pre count=1
 rsck_check "pre-restore command runs" [expr {[aip_read_result] eq "OK: rs_pre count=1"}]
-aip_restore regseq
-source [file join $::env(AIP_CORE) tests tcl test_aip_reg_seq_ckpt_common.tcl]
+aip_restore bindseq
+source [file join $::env(AIP_CORE) tests tcl test_aip_bind_seq_ckpt_common.tcl]
 set A uvm_test_top.env.a.sqr
 set B uvm_test_top.env.b.sqr
 set ::rsck_checks 0
@@ -34,9 +34,9 @@ kill_seq name=rs_ck
 rsck_check "kill_seq tracks restored command" [expr {[string match "killed=1*" [aip_read_result]]}]
 run 50ns
 rsck_check "pre-restore command gone" [expr {[catch {rs_pre count=1} msg] && [string match "invalid command name*" $msg]}]
-set r [aip_reg_seq cmd=rs_ck type=rs_path_seq sqr=$B path=rs.ck]
+set r [aip_bind_seq cmd=rs_ck type=rs_path_seq sqr=$B path=rs.ck]
 rsck_check "restored name still taken" [expr {[aip_check_status] == 1 && [string match "*already exists*" $r]}]
-set r [aip_reg_seq cmd=rs_pre type=rs_plain_seq sqr=$A]
+set r [aip_bind_seq cmd=rs_pre type=rs_plain_seq sqr=$A]
 rsck_check "freed name registers again" [expr {[aip_check_status] == 0}]
 rs_pre count=1
 rsck_check "re-registered command runs" [expr {[aip_read_result] eq "OK: rs_pre count=1" && [rsck_state sqr_items a] == 1}]

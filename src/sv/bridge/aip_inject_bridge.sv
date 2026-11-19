@@ -147,7 +147,7 @@ class aip_inject_bridge;
             name == "so_reload" || name == "so_unload" || name == "set_param" ||
             name == "clear_param" || name == "kill_seq" || name == "set_cmd_watchdog" ||
             name == "sv::cpu_bridge_reinit" || name == "load_image" ||
-            name == "cpu_wait" || name == "aip_reg_seq" || name == "aip_unreg_seq" ||
+            name == "cpu_wait" || name == "aip_bind_seq" || name == "aip_unbind_seq" ||
             (__aip_cmd_is_cpu.exists(name) && __aip_cmd_is_cpu[name])) begin
             error_text = {"command is not allowed in injection queue: ", name};
             return 0;

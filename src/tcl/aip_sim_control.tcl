@@ -566,11 +566,12 @@ proc _aip_advance {mode args} {
     # 原生启动握手可能产生 TCL_RETURN。额外的 Tcl 封装层不可吞掉这个
     # 返回码，因此内部辅助路径显式将 -level 加一后原样交回调用者。
     if {$mode in {bootstrap checkpoint settle}} {
+        # 静音推进直接放在本 catch 内：经 _aip_control_quiet_run 再包一层 proc 会在其边界吞掉 TCL_RETURN。
         set code [catch {
-            if {$mode in {bootstrap checkpoint settle}} {
-                _aip_control_quiet_run {*}$args
-            } else {
+            if {[info commands redirect] eq ""} {
                 _vcs_run {*}$args
+            } else {
+                redirect /dev/null [list _vcs_run {*}$args]
             }
         } value options]
         dict set ::_aip_control_state depth 0

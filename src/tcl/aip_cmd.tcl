@@ -272,6 +272,16 @@ proc aip_getparam {name} {
     return [aip_read_result]
 }
 
+# 块的首个命令是否为 aip_run_self：跳过空行和注释行，注释里出现同名文字不算调用。
+proc _aip_block_calls_run_self {block} {
+    foreach line [split $block "\n"] {
+        set line [string trim $line]
+        if {$line eq "" || [string index $line 0] eq "#"} continue
+        return [regexp {^(::)?aip_run_self(\s|;|$)} $line]
+    }
+    return 0
+}
+
 # 按 info complete 切成语法完整的块，供 aip_source/aip_run_self 逐块执行。
 proc _aip_parse_blocks {script} {
     set blocks {}
@@ -424,7 +434,7 @@ proc aip_run_self {} {
 
     set body_start -1
     for {set i 0} {$i < $total} {incr i} {
-        if {[string first "aip_run_self" [lindex $blocks $i]] >= 0} {
+        if {[_aip_block_calls_run_self [lindex $blocks $i]]} {
             set body_start [expr {$i + 1}]
             break
         }
@@ -532,17 +542,17 @@ proc clear_param {args} {
     return [aip_read_result]
 }
 
-# 运行时注册 seq 命令：aip_reg_seq cmd=<新名> type=<已声明类型> sqr=<sequencer 全路径> [path=<参数路径>]。
+# 运行时绑定 seq 命令：aip_bind_seq cmd=<新名> type=<已声明类型> sqr=<sequencer 全路径> [path=<参数路径>]。
 # 校验与报错在 SV（ERROR/status=1）；与 Tcl 已有命令重名时 Tcl 会先解析该名，到不了 unknown，故在此拒绝。
 # 成功后立即同步命令名表缓存，新命令随即走 SV 派发。fork 收集期间注册与子命令派发无先后保证，拒绝。
-proc aip_reg_seq {args} {
-    if {$::_aip_fork_mode} { error "aip_reg_seq: cannot register a command inside a fork block" }
+proc aip_bind_seq {args} {
+    if {$::_aip_fork_mode} { error "aip_bind_seq: cannot bind a command inside a fork block" }
     foreach a $args {
         if {[regexp {^cmd=([A-Za-z_][A-Za-z0-9_.:-]*)$} $a -> name] && [info commands $name] ne ""} {
-            error "aip_reg_seq: '$name' is already a Tcl command; Tcl would never forward it to SV"
+            error "aip_bind_seq: '$name' is already a Tcl command; Tcl would never forward it to SV"
         }
     }
-    set full_cmd "aip_reg_seq"
+    set full_cmd "aip_bind_seq"
     if {[llength $args]} { append full_cmd " $args" }
     aip_send_cmd $full_cmd
     set result [aip_read_result]
@@ -550,10 +560,10 @@ proc aip_reg_seq {args} {
     return $result
 }
 
-# 注销 aip_reg_seq 生成的空闲命令：aip_unreg_seq cmd=<名>；其他命令、执行中或有排队请求时 SV 报错。
-proc aip_unreg_seq {args} {
-    if {$::_aip_fork_mode} { error "aip_unreg_seq: cannot unregister a command inside a fork block" }
-    set full_cmd "aip_unreg_seq"
+# 注销 aip_bind_seq 生成的空闲命令：aip_unbind_seq cmd=<名>；其他命令、执行中或有排队请求时 SV 报错。
+proc aip_unbind_seq {args} {
+    if {$::_aip_fork_mode} { error "aip_unbind_seq: cannot unbind a command inside a fork block" }
+    set full_cmd "aip_unbind_seq"
     if {[llength $args]} { append full_cmd " $args" }
     aip_send_cmd $full_cmd
     set result [aip_read_result]
@@ -645,7 +655,7 @@ proc unknown {cmd args} {
 
     # 快速失败：不在 SV 命令名表缓存中的命令跳过会推进仿真的 SV 握手，直接试原生 Tcl。
     # 缓存未建（老 SV、表满）或运行时加载过 .so 插件时不走此路，全部 SV-first。
-    # 未命中先按表版本同步一次：aip_reg_seq 等运行时注册与 restore 都会改变 SV 命令表。
+    # 未命中先按表版本同步一次：aip_bind_seq 等运行时注册与 restore 都会改变 SV 命令表。
     if {[info exists ::_aip_known_cmds] && ![info exists ::_aip_dynamic_cmds] \
             && ![dict exists $::_aip_known_cmds $cmd]} {
         catch { _aip_known_cmds_sync }

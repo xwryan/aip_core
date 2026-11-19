@@ -111,7 +111,7 @@ import uvm_pkg::*;
 `include "bridge/aip_inject_bridge.sv"
 `include "bridge/aip_tcl_bridge.sv"
 
-// seq 启动器与 aip_reg_seq：依赖 aip_activity 和命令名表重发，故在 Tcl bridge 之后。
+// seq 启动器与 aip_bind_seq：依赖 aip_activity 和命令名表重发，故在 Tcl bridge 之后。
 `include "core/aip_seq_launcher.sv"
 
 // RAL 报告/生命周期底座；include 本身不访问 DUT，也不配置模型。
