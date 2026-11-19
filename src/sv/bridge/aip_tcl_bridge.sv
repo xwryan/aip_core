@@ -35,10 +35,12 @@ reg __tcl_cmd_trigger = 0;
 reg [31:0] __tcl_cmd_id    = 0;
 reg [31:0] __tcl_result_id = 0;
 
-// 已注册命令名表 (逗号分隔). bridge 启动时写一次 (静态注册), TCL 启动 get
-// 后门读 (零握手) 缓存成 dict, 用于未注册命令快速失败. 4096 字符够装上百条.
+// 已注册命令名表 (逗号分隔). bridge 启动时写入, 注册表变化 (aip_reg_seq 等运行时注册/注销) 后重写;
+// TCL get 后门读 (零握手) 缓存成 dict, 用于未注册命令快速失败. 4096 字符够装上百条.
 reg [31:0] __tcl_cmd_names_ascii [0:4095];
 reg [31:0] __tcl_cmd_names_len = 0;
+// 命令名表版本：每次重写加 1；Tcl 缓存版本与之不同即重读（运行时注册、restore 回滚后）。
+reg [31:0] __tcl_cmd_names_gen = 0;
 
 // Tcl 只读镜像：ACK 等待只计活动计数不变的时间，且不早于命令停滞 watchdog 放弃（禁用时 stall=0）。
 reg [31:0] __tcl_activity_count = 0;
@@ -103,7 +105,28 @@ class aip_tcl_bridge;
 
     static aip_cmd_watchdog_hook watchdog_hook = null;
 
+    // 已发布命令名表对应的注册表版本。
+    local static int unsigned names_registry_version = 0;
+
     function new();
+    endfunction
+
+    // 重写命令名表并递增版本；超出缓冲时截断，Tcl 见表满即不建缓存、未知命令全部交 SV 判定。
+    static function void publish_cmd_names();
+        string cmd_names;
+        cmd_names = aip_cmd::get_all_cmd_names();
+        if (cmd_names.len() > 4096)
+            `aip_warning(("[AIP_TCL_BRIDGE] cmd-name list %0d chars > 4096 buf; truncated, Tcl falls back to SV lookup for unknown commands", cmd_names.len()));
+        __tcl_cmd_names_len = (cmd_names.len() > 4096) ? 4096 : cmd_names.len();
+        for (int n = 0; n < cmd_names.len() && n < 4096; n = n + 1)
+            __tcl_cmd_names_ascii[n] = cmd_names[n];
+        names_registry_version = __aip_cmd_registry_version;
+        __tcl_cmd_names_gen = __tcl_cmd_names_gen + 1;
+    endfunction
+
+    // 注册表变化后才重写：aip_reg_seq 注册/注销时立即调用，run_loop 每条命令 ACK 前兜底。
+    static function void sync_cmd_names();
+        if (names_registry_version != __aip_cmd_registry_version) publish_cmd_names();
     endfunction
 
     // 设置空命令循环阈值；与按命令的停滞watchdog不是同一个限制。
@@ -210,16 +233,8 @@ class aip_tcl_bridge;
 
         `aip_info(("[AIP_TCL_BRIDGE] Started, waiting for commands..."));
 
-        // 命令名表在 elaboration 期静态注册，启动时写一次供 Tcl 后门读取（零握手），用于未注册命令快速失败。
-        begin
-            string cmd_names;
-            cmd_names = aip_cmd::get_all_cmd_names();
-            if (cmd_names.len() > 4096)
-                `aip_warning(("[AIP_TCL_BRIDGE] cmd-name list %0d chars > 4096 buf; truncated, unknown-cmd fast-fail may miss tail", cmd_names.len()));
-            __tcl_cmd_names_len = (cmd_names.len() > 4096) ? 4096 : cmd_names.len();
-            for (int n = 0; n < cmd_names.len() && n < 4096; n = n + 1)
-                __tcl_cmd_names_ascii[n] = cmd_names[n];
-        end
+        // 静态注册的命令名表启动时写入供 Tcl 后门读取（零握手），用于未注册命令快速失败。
+        publish_cmd_names();
 
         // 启动 break: 让 source aip_cmd.tcl 末尾的 _vcs_run 返回 ucli prompt
         __tcl_bridge_idle = 1;
@@ -406,6 +421,8 @@ class aip_tcl_bridge;
 
                 `aip_debug(("[AIP_TCL_BRIDGE] Result: status=%0d, msg=%s", __tcl_result_status, result));
 
+                // 本命令若改变了注册表（运行时注册、插件加载/卸载），ACK 前重发命令名表。
+                sync_cmd_names();
                 update_sim_time();
 
                 __tcl_cmd_len = 0;

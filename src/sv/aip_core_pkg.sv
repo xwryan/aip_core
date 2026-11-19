@@ -31,6 +31,8 @@
 `define AIP_CORE_PKG_PREINCLUDE_CONFLICT
 `elsif AIP_INJECT_BRIDGE_SV
 `define AIP_CORE_PKG_PREINCLUDE_CONFLICT
+`elsif AIP_SEQ_LAUNCHER_SV
+`define AIP_CORE_PKG_PREINCLUDE_CONFLICT
 `elsif AIP_DUT_CONTROL_SV
 `define AIP_CORE_PKG_PREINCLUDE_CONFLICT
 `elsif AIP_RAL_TYPES_SV
@@ -108,6 +110,9 @@ import uvm_pkg::*;
 `include "bridge/aip_c_bridge.sv"
 `include "bridge/aip_inject_bridge.sv"
 `include "bridge/aip_tcl_bridge.sv"
+
+// seq 启动器与 aip_reg_seq：依赖 aip_activity 和命令名表重发，故在 Tcl bridge 之后。
+`include "core/aip_seq_launcher.sv"
 
 // RAL 报告/生命周期底座；include 本身不访问 DUT，也不配置模型。
 `include "ral/aip_ral_types.sv"

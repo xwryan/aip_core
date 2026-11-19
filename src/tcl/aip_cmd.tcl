@@ -532,6 +532,35 @@ proc clear_param {args} {
     return [aip_read_result]
 }
 
+# 运行时注册 seq 命令：aip_reg_seq cmd=<新名> type=<已声明类型> sqr=<sequencer 全路径> [path=<参数路径>]。
+# 校验与报错在 SV（ERROR/status=1）；与 Tcl 已有命令重名时 Tcl 会先解析该名，到不了 unknown，故在此拒绝。
+# 成功后立即同步命令名表缓存，新命令随即走 SV 派发。fork 收集期间注册与子命令派发无先后保证，拒绝。
+proc aip_reg_seq {args} {
+    if {$::_aip_fork_mode} { error "aip_reg_seq: cannot register a command inside a fork block" }
+    foreach a $args {
+        if {[regexp {^cmd=([A-Za-z_][A-Za-z0-9_.:-]*)$} $a -> name] && [info commands $name] ne ""} {
+            error "aip_reg_seq: '$name' is already a Tcl command; Tcl would never forward it to SV"
+        }
+    }
+    set full_cmd "aip_reg_seq"
+    if {[llength $args]} { append full_cmd " $args" }
+    aip_send_cmd $full_cmd
+    set result [aip_read_result]
+    if {[aip_check_status] == 0} { catch { _aip_known_cmds_sync } }
+    return $result
+}
+
+# 注销 aip_reg_seq 生成的空闲命令：aip_unreg_seq cmd=<名>；其他命令、执行中或有排队请求时 SV 报错。
+proc aip_unreg_seq {args} {
+    if {$::_aip_fork_mode} { error "aip_unreg_seq: cannot unregister a command inside a fork block" }
+    set full_cmd "aip_unreg_seq"
+    if {[llength $args]} { append full_cmd " $args" }
+    aip_send_cmd $full_cmd
+    set result [aip_read_result]
+    if {[aip_check_status] == 0} { catch { _aip_known_cmds_sync } }
+    return $result
+}
+
 # SV-like fork/join: "fork cmd1, cmd2 join" on one line, or a bare fork, one command per line,
 # then join (wait all) / join_any [disable_remaining=1] (wait first) / join_none (don't wait).
 if {![info exists ::_aip_fork_mode]} { set ::_aip_fork_mode 0 }
@@ -614,14 +643,18 @@ proc unknown {cmd args} {
         return
     }
 
-    # 快速失败：不在启动缓存的 SV 注册表中的命令跳过会推进仿真的 SV 握手，直接试原生 Tcl。
-    # 缓存未建（老 SV）或运行时加载过 .so 插件（注册表已变）时不走此路，全部 SV-first。
+    # 快速失败：不在 SV 命令名表缓存中的命令跳过会推进仿真的 SV 握手，直接试原生 Tcl。
+    # 缓存未建（老 SV、表满）或运行时加载过 .so 插件时不走此路，全部 SV-first。
+    # 未命中先按表版本同步一次：aip_reg_seq 等运行时注册与 restore 都会改变 SV 命令表。
     if {[info exists ::_aip_known_cmds] && ![info exists ::_aip_dynamic_cmds] \
             && ![dict exists $::_aip_known_cmds $cmd]} {
-        if {![catch {_original_unknown $cmd {*}$args} ucli_result]} {
-            return $ucli_result
+        catch { _aip_known_cmds_sync }
+        if {[info exists ::_aip_known_cmds] && ![dict exists $::_aip_known_cmds $cmd]} {
+            if {![catch {_original_unknown $cmd {*}$args} ucli_result]} {
+                return $ucli_result
+            }
+            error "invalid command name \"$cmd\""
         }
-        error "invalid command name \"$cmd\""
     }
 
     # SV 优先，防止 UCLI 内置命令经 alias/前缀/auto_load 静默抢词；SV 是否认识由 known 位判断，
@@ -712,21 +745,38 @@ for {set _i 1} {$_i <= [info frame]} {incr _i} {
 }
 catch {unset _i _f _path}
 
-# 读回 bridge 启动时写入 __tcl_cmd_names_ascii[] 的命令表（只 get、不推进），供 unknown 快速失败。
+# 读回 SV 写入 __tcl_cmd_names_ascii[] 的命令表并记下表版本（只 get、不推进），供 unknown 快速失败。
+# 表满（可能已截断）时撤销缓存，未知命令全部交 SV 判定，不误拒表尾的命令。
 proc _aip_load_known_cmds {} {
     # 老 SV 无此寄存器时 get 报错：须静默返回、不建表（unknown 退回 SV-first），以免中断 source。
     if {[catch {aip_parse_int [get aip_core_pkg::__tcl_cmd_names_len]} n]} return
     if {$n <= 0} return
+    # 老 SV 无版本寄存器时版本记空，缓存只在启动时建立，与原行为一致。
+    if {[catch {aip_parse_int [get aip_core_pkg::__tcl_cmd_names_gen]} gen]} { set gen "" }
+    if {$n >= 4096} {
+        unset -nocomplain ::_aip_known_cmds
+        set ::_aip_known_cmds_gen $gen
+        return
+    }
     set s ""
     for {set i 0} {$i < $n} {incr i} {
         if {[catch {aip_parse_int [get aip_core_pkg::__tcl_cmd_names_ascii\[$i\]]} v]} return
         append s [format %c $v]
     }
-    set ::_aip_known_cmds [dict create]
+    set known [dict create]
     foreach name [split $s ","] {
         set name [string trim $name]
-        if {$name ne ""} { dict set ::_aip_known_cmds $name 1 }
+        if {$name ne ""} { dict set known $name 1 }
     }
+    set ::_aip_known_cmds $known
+    set ::_aip_known_cmds_gen $gen
+}
+
+# 表版本与缓存不同才重读（运行时注册/注销、restore 回滚后）；老 SV 无版本寄存器时保持原缓存。
+proc _aip_known_cmds_sync {} {
+    if {[catch {aip_parse_int [get aip_core_pkg::__tcl_cmd_names_gen]} gen]} return
+    if {[info exists ::_aip_known_cmds_gen] && $::_aip_known_cmds_gen eq $gen} return
+    _aip_load_known_cmds
 }
 
 # restore 后的参数源失效请求（CLI 由 SV 首次查询时枚举）；只读写后门寄存器，不推进仿真。
@@ -753,6 +803,10 @@ if {![info exists ::_aip_bridge_started]} {
     set ::_aip_bridge_started 1
     _aip_advance bootstrap
     catch { _aip_load_known_cmds }   ;# 双保险: 任何失败都不许崩 source
+} elseif {![info exists ::aip_tcl_embedded] || !$::aip_tcl_embedded} {
+    # 重复 source 或 restore 后重载：SV 命令表可能已有运行时注册的命令或随快照回滚，重读缓存（只 get、不推进）。
+    # .so 模式由 aip_init_so.tcl 在 load 之后重读。
+    catch { _aip_load_known_cmds }
 }
 
 # 启动或 restore 重载后核对控制层孤立状态；.so 加载期间不能触发桥行为，

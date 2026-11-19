@@ -224,6 +224,9 @@ endclass
 // Kept outside the class for VCS Q-2020: static class-typed assoc arrays inside a class may break.
 aip_cmd __aip_cmd_registry[string];
 
+// 注册表每次新增/注销加 1，Tcl bridge 据此重发命令名表；不设初值，避免受静态初始化顺序影响。
+int unsigned __aip_cmd_registry_version;
+
 // 旧静态 facade 直接调用时没有注册 handle，在此登记临时上下文，供 set_result 按 process 定位。
 aip_cmd_result_context __aip_compat_result_scopes[$];
 
@@ -356,6 +359,7 @@ class aip_cmd;
             `aip_error(("[AIP_CMD] Command '%s' already registered", name));
         end else begin
             __aip_cmd_registry[name] = this;
+            __aip_cmd_registry_version++;
         end
     endfunction
 
@@ -368,8 +372,10 @@ class aip_cmd;
 
     // 供插件卸载；调用方须确保没有在途命令。
     static function void unregister(string name);
-        if (__aip_cmd_registry.exists(name))
+        if (__aip_cmd_registry.exists(name)) begin
             __aip_cmd_registry.delete(name);
+            __aip_cmd_registry_version++;
+        end
     endfunction
 
     static function string get_all_cmd_names();
@@ -2486,49 +2492,18 @@ endclass
 // Binds a seq type + sequencer to a command. The seq needs `int count`; transaction fields come
 // from aip_cmdline. Time mode sets count to max and kills the seq at expiry (no driver rollback).
 //   `aip_cmd_seq(axi_write, axi_wr_seq, virtual_sqr::axi_wr_sqr)  ->  axi_write count=10 | time=1us
+// 启动流程与 Tcl aip_reg_seq 共用 aip_seq_launcher::run（core/aip_seq_launcher.sv）；本类只负责创建并写 count。
 `define aip_cmd_seq(cmd_name, seq_type, sequencer) \
-class \__aip_seq_``cmd_name ; \
+class \__aip_seq_``cmd_name extends aip_seq_launcher; \
+    function new(); super.new(`"seq_type`", 1'b0, `__FILE__, `__LINE__); endfunction \
+    virtual function uvm_sequence_base create(string inst_name, int count, string param_path); \
+        seq_type __seq = seq_type::type_id::create(inst_name); \
+        __seq.count = count; \
+        return __seq; \
+    endfunction \
     static task launch(); \
-        string __args = aip_cmd::get_handle(`"cmd_name`").args_in; \
-        string __count_s = aip_cmd::get_arg(__args, "count"); \
-        string __time_s  = aip_cmd::get_arg(__args, "time"); \
-        seq_type __seq; \
-        __seq = seq_type::type_id::create(`"cmd_name`"); \
-        if (__time_s != "") begin \
-            real __timeout_ns = aip_cmd::parse_time_ns(__time_s); \
-            __seq.count = 2147483647; \
-            aip_cmd_seq_registry::register(`"cmd_name`", __seq); \
-            `aip_info(("[SEQ] %s start, time=%s (%.1f ns)", `"cmd_name`", __time_s, __timeout_ns)); \
-            fork \
-                __seq.start(sequencer); \
-                begin \
-                    aip_time::delay_ns(__timeout_ns); \
-                    __seq.kill(); \
-                end \
-            join \
-            aip_cmd_seq_registry::unregister(`"cmd_name`"); \
-            aip_activity::tick(); \
-            `aip_info(("[SEQ] %s done (timed)", `"cmd_name`")); \
-            begin \
-                aip_cmd __h = aip_cmd::get_handle(`"cmd_name`"); \
-                __h.result_out = $sformatf("OK: %s time=%s", `"cmd_name`", __time_s); \
-                __h.status = 0; \
-            end \
-        end else begin \
-            int __count = aip_cmd::parse_int_arg(__count_s, 1); \
-            __seq.count = __count; \
-            aip_cmd_seq_registry::register(`"cmd_name`", __seq); \
-            `aip_info(("[SEQ] %s start, count=%0d", `"cmd_name`", __count)); \
-            __seq.start(sequencer); \
-            aip_cmd_seq_registry::unregister(`"cmd_name`"); \
-            aip_activity::tick(); \
-            `aip_info(("[SEQ] %s done", `"cmd_name`")); \
-            begin \
-                aip_cmd __h = aip_cmd::get_handle(`"cmd_name`"); \
-                __h.result_out = $sformatf("OK: %s count=%0d", `"cmd_name`", __count); \
-                __h.status = 0; \
-            end \
-        end \
+        \__aip_seq_``cmd_name __launcher = new(); \
+        __launcher.run(aip_cmd::get_handle(`"cmd_name`"), sequencer); \
     endtask \
 endclass \
 `aip_cmd_task(cmd_name, \__aip_seq_``cmd_name ::launch)
@@ -2573,46 +2548,22 @@ class \__aip_cseq_impl_``cmd_name extends seq_type; \
     /* 仅正常返回时 ungrab；被取消时依赖 UVM kill 释放 sequence 资源。 */ \
     virtual task post_body(); super.post_body(); this.ungrab(); endtask \
 endclass \
-class \__aip_cseq_``cmd_name ; \
+/* 共用 aip_seq_launcher::run；日志保持 [CSEQ] grab 且无 done 行。 */ \
+class \__aip_cseq_``cmd_name extends aip_seq_launcher; \
+    function new(); \
+        super.new(`"seq_type`", 1'b0, `__FILE__, `__LINE__); \
+        log_tag = "CSEQ"; \
+        log_verb = "grab"; \
+        log_done = 0; \
+    endfunction \
+    virtual function uvm_sequence_base create(string inst_name, int count, string param_path); \
+        \__aip_cseq_impl_``cmd_name __seq = new(inst_name); \
+        __seq.count = count; \
+        return __seq; \
+    endfunction \
     static task launch(); \
-        string __args = aip_cmd::get_handle(`"cmd_name`").args_in; \
-        string __count_s = aip_cmd::get_arg(__args, "count"); \
-        string __time_s  = aip_cmd::get_arg(__args, "time"); \
-        \__aip_cseq_impl_``cmd_name __seq; \
-        __seq = new(`"cmd_name`"); \
-        if (__time_s != "") begin \
-            real __timeout_ns = aip_cmd::parse_time_ns(__time_s); \
-            __seq.count = 2147483647; \
-            aip_cmd_seq_registry::register(`"cmd_name`", __seq); \
-            `aip_info(("[CSEQ] %s grab, time=%s (%.1f ns)", `"cmd_name`", __time_s, __timeout_ns)); \
-            fork \
-                __seq.start(sequencer); \
-                begin \
-                    aip_time::delay_ns(__timeout_ns); \
-                    __seq.kill(); \
-                end \
-            join \
-            aip_cmd_seq_registry::unregister(`"cmd_name`"); \
-            aip_activity::tick(); \
-            begin \
-                aip_cmd __h = aip_cmd::get_handle(`"cmd_name`"); \
-                __h.result_out = $sformatf("OK: %s time=%s", `"cmd_name`", __time_s); \
-                __h.status = 0; \
-            end \
-        end else begin \
-            int __count = aip_cmd::parse_int_arg(__count_s, 1); \
-            __seq.count = __count; \
-            aip_cmd_seq_registry::register(`"cmd_name`", __seq); \
-            `aip_info(("[CSEQ] %s grab, count=%0d", `"cmd_name`", __count)); \
-            __seq.start(sequencer); \
-            aip_cmd_seq_registry::unregister(`"cmd_name`"); \
-            aip_activity::tick(); \
-            begin \
-                aip_cmd __h = aip_cmd::get_handle(`"cmd_name`"); \
-                __h.result_out = $sformatf("OK: %s count=%0d", `"cmd_name`", __count); \
-                __h.status = 0; \
-            end \
-        end \
+        \__aip_cseq_``cmd_name __launcher = new(); \
+        __launcher.run(aip_cmd::get_handle(`"cmd_name`"), sequencer); \
     endtask \
 endclass \
 `aip_cmd_task(cmd_name, \__aip_cseq_``cmd_name ::launch)

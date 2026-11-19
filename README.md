@@ -186,7 +186,8 @@ vcs -sverilog -ntb_opts uvm -full64 -timescale=1ns/1ps -debug_access+r+w+f+wn \
 
 UVM sequence 也能注册成命令（`aip_cmd_seq` / `aip_cmd_user_seq` /
 `aip_cmd_reg` / `aip_cmd_cseq` / `aip_cmd_creg`），见
-[第 5 节](#5-uvm-sequence-当命令用)。CPU 固件命令用
+[第 5 节](#5-uvm-sequence-当命令用)；声明过的 sequence 类型还可由 Tcl `aip_reg_seq`
+运行时绑定到 sequencer 生成新命令（5.5 节）。CPU 固件命令用
 `aip_cmd_cpu`，见 [第 10 节](#10-cpu-固件命令aip_cpu_bridge)。
 
 SV 内部也可以直接执行命令字符串：
@@ -1161,7 +1162,42 @@ RAM写值比较，不关闭Completion状态、tag、长度或超时检查；普�
 已有“1=使能”的 sequence 需要显式传原来的 mask。PCIe 新 sequence 使用“1=屏蔽字节”，
 支持 4/8/12/16 字节、小端数据和部分字节访问。`make test_reg_wide` 验证命令层兼容与宽数据。
 
-### 5.5 与传统 UVM 流程对比
+### 5.5 运行时注册 sequence 命令（`aip_reg_seq`）
+
+同一种 sequence 要按实例分别下命令（如每个队列一条 TX 命令）时，不必每个实例写一行 `aip_cmd_seq` 再重编译：
+SV 侧每种类型声明一行，Tcl 运行时把类型绑定到具体 sequencer，生成新命令。
+
+```systemverilog
+// 随用户代码编译，每类型一行；宏参数原文即 type= 的值，T 须 `uvm_object_utils 注册
+`aip_seq_type(vio_rx_seq)          // T 有 int count（同 aip_cmd_seq）
+`aip_seq_type_path(vio_tx_seq)     // T 另有 string param_path，只有这种类型接受 path=
+```
+
+```tcl
+aip_reg_seq cmd=vio_tx_p1 type=vio_tx_seq sqr=uvm_test_top.env.vio.p1.sqr path=vio.tx.p1
+set_param path=vio.tx.p1.len value=128     ;# seq 在 body 中按 param_path 读参数
+fork vio_tx count=1000, vio_tx_p1 count=1000 join
+vio_tx_p1 time=10us wait=0                 ;# 与 aip_cmd_seq 命令用法完全相同
+aip_unreg_seq cmd=vio_tx_p1                ;# 可选：注销空闲的运行时命令，名字可再注册
+```
+
+- `sqr=` 是 sequencer 的 UVM 全名（`get_full_name()`），逐级精确查找，不支持通配符，须在 UVM build 之后注册。
+- 生成的命令与 `aip_cmd_seq` 共用启动流程：`count=N`（缺省 1）或 `time=T`、`wait=0`、同名重入 BUSY、
+  `kill_seq`/看门狗登记、缺省结果 `OK: <cmd> count=N`。启动前写 `seq.count`，给了 `path=` 才写 `seq.param_path`；
+  两者在 create 之后写入，依赖它们的参数要在 body 中读，不要在 `new()` 中读。
+- 下列情况返回 `ERROR: aip_reg_seq: ...`、`status=1`，不覆盖也不新建命令：缺 `cmd=`/`type=`/`sqr=`，未知、
+  重复或空值的键，名字已是命令（含内置和编译期注册的）或不合法（字母/`_` 开头，只含字母、数字、`_ . : -`），
+  类型未声明，`sqr` 找不到或不是 sequencer，对没有 path 支持的类型给 `path=`。名字与 Tcl 已有命令
+  （proc/UCLI 内置，如 `run`）重名时 Tcl 直接报错，因为 Tcl 会先解析该名。
+- `aip_unreg_seq` 只注销 `aip_reg_seq` 生成且空闲的命令，执行中或有排队请求时报 BUSY。两条命令都不能写在
+  Tcl 多行 fork 块里（注册与子命令派发无先后保证），也不进暂停注入队列。SV 侧可直接调
+  `aip_reg_seq_cmd::register/unregister`。
+- 注册成功后 Tcl 立即同步命令名表，新名字直接调用；经 TCP 或 SV 注册的命令在 Tcl 首次调用时按表版本自动同步。
+  `aip_send_cmd "help"` 在 `[aip_reg_seq]` 组下列出运行时命令及其绑定。
+- 快照：运行时命令属于 SV 状态，随快照保存/恢复，restore 后照常重新 source 加载脚本即可（命令名表自动重读）。
+  恢复的是快照时刻的注册表：快照之后注册的命令不存在，快照前已注册的名字恢复后再注册会报“已存在”。
+
+### 5.6 与传统 UVM 流程对比
 
 | | 传统 UVM | Tcl 模式 |
 |---|---|---|
@@ -1174,7 +1210,7 @@ RAM写值比较，不关闭Completion状态、tag、长度或超时检查；普�
 | 退出 | drop_objection | `end_test drain=N` |
 | 调试 | 改代码重编译重跑 | Tcl 交互式试探 |
 
-### 5.6 公共 scoreboard 与整笔事务采样（aip_scb / aip_mon_hub）
+### 5.7 公共 scoreboard 与整笔事务采样（aip_scb / aip_mon_hub）
 
 两组组件都只依赖 UVM，随 `aip_core_pkg` 编译，不需要 Tcl 运行库；生成器产出的 UVM 平台可直接使用。
 
@@ -2167,6 +2203,7 @@ make ci                      # ci-host + ci-sv + ci-regress（含命令/快照/�
 make test_core_package       # 单个 SV 回归，其余见 make help
 make test_scb                # 公共 scoreboard 语义与报告矩阵
 make test_mon_hub            # 整笔事务采样 hub / 采样 sequence
+make test_aip_reg_seq        # Tcl 运行时注册 seq 命令（源码/.so 两种 loader）
 make test_cmdline_zero_weight # 零权重、全零/负权重及用户源码定位
 make test_cmdline_diagnostics # 非权重错误定位、FATAL 退出和禁止错误后继续执行
 make test_cmdline_split       # 分层后的原入口兼容性、确定性样例及内部片段独立编译拒绝检查
