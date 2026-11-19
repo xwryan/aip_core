@@ -5,7 +5,7 @@ module test_cmdline_negative;
     int failures;
     int neg_dec, neg_hex, neg_sv, plus_dec, neg_range, cross_range;
     int neg_list, neg_inc, neg_dec_seq, neg_weight, positive;
-    bit [7:0] neg_bits;
+    bit signed [7:0] neg_bits;  // 有符号位向量接受负数；无符号目标拒绝负数见 test_cmdline_unsigned
     int width;
     longint unsigned raw;
 
@@ -37,7 +37,7 @@ module test_cmdline_negative;
         `aip_int("", int, neg_inc, 0);
         `aip_int("", int, neg_dec_seq, 0);
         `aip_int("", int, neg_weight, 0);
-        `aip_int("", bit [7:0], neg_bits, 0);
+        `aip_int("", bit signed [7:0], neg_bits, 0);
         `aip_int("", int, positive, 0);
 
         check_equal("neg_dec", neg_dec, -10);
@@ -52,7 +52,7 @@ module test_cmdline_negative;
         check_true("neg_dec_seq", neg_dec_seq >= -10 && neg_dec_seq <= 10 &&
                    ((neg_dec_seq + 10) % 2 == 0));
         check_true("neg_weight", neg_weight >= -3 && neg_weight <= -1);
-        check_equal("neg_bits", neg_bits, 8'hff);
+        check_equal("neg_bits", neg_bits, -1);
         check_equal("positive", positive, 42);
 
         raw = aip_str::str_to_num("-", width);

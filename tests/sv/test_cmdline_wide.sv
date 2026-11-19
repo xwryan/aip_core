@@ -75,7 +75,7 @@ module test_cmdline_wide;
         `aip_int("", bit [127:0], u128,     0);   // +u128=340282366920938463463374607431768211455
         `aip_int("", bit [255:0], u256,     0);   // +u256=256'hff..ff
         `aip_int("", bit [255:0], u256_pat, 0);   // +u256_pat=0x0123...
-        `aip_int("", bit [7:0],   u8,       0);   // +u8=-1
+        `aip_int("", bit [7:0],   u8,       0);   // +u8=8'hff（无符号目标不接受负数）
         `aip_int("", int,         i32,      0);   // +i32=-0x10
         `aip_int("", int unsigned, iu32,    0);   // +iu32=0xFFFF_FFFF
 
@@ -85,7 +85,7 @@ module test_cmdline_wide;
         check_true("bit[255:0] 256'h all ones", u256 == {256{1'b1}});
         check_true("bit[255:0] pattern high word", u256_pat[255:224] == 32'h0123_4567);
         check_true("bit[255:0] pattern low word",  u256_pat[31:0]    == 32'h89ab_cdef);
-        check_true("-1 into bit[7:0] wraps to ff", u8 == 8'hff);
+        check_true("8'hff into bit[7:0] at the max", u8 == 8'hff);
         check_true("-0x10 into int", i32 == -16);
         check_true("0xFFFF_FFFF into int unsigned", iu32 == 32'hFFFF_FFFF);
     endtask

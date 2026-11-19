@@ -79,7 +79,7 @@ data=0xdeadbeef
 
 | 目标 | plusarg 示例 | 含义 |
 |---|---|---|
-| 负整数 | `+dut.count=-10` | `aip_int` 得到 `-10` |
+| 负整数 | `+dut.count=-10` | 有符号目标得到 `-10`；无符号目标（`bit`/`logic` 位向量、`* unsigned`）hard fatal |
 | 宽位整数 | `+dut.key=256'hFFFF_...` | 按目标类型位宽解析，最大 1024 bit，超位宽报错 |
 | 随机候选 | `+dut.count=1,2,3` 或 `+dut.count=[1,2,3]` | `aip_int` 随机选择一个候选 |
 | 范围随机 | `+dut.count=[1:3]` | 从闭区间 `[1:3]` 随机取值 |
@@ -448,8 +448,39 @@ cfg_t cfg;
 ```
 
 `aip_flags` 的成员名（不区分大小写）与整数掩码不能混写，成员名优先于数字解析；整数写法同 `aip_int`
-固定值。来源优先级、`set_param`/`clear_param` 与层级路径同 `aip_int`，空 override 为 0。不支持随机语法，
+无符号固定值（不接受负数）。来源优先级、`set_param`/`clear_param` 与层级路径同 `aip_int`，空 override 为 0。不支持随机语法，
 读取不消耗随机数；未知名称、空项、位号或数值超出目标位宽都 hard fatal，并报出参数路径与非法项。
+
+```systemverilog
+// 可选参数：变量当前值即默认值；缺失或空值（含空 override）保持不变，给出时求值写入并把 given 置 1（未给出不改）
+bit changed;
+`aip_int_opt("eth0.outer_ipv4", bit [7:0], ttl, changed)
+`aip_string_opt("dut", label)
+`aip_enum_opt("dut", speed_e, spd)                      // 名称、成员值（如 0x1）或整串 rand
+`aip_int_list_opt("dut", byte unsigned, opts)           // 动态数组/queue：先选根（完整、别名、叶名），整体替换
+`aip_int_slist_opt("dut", bit [31:0], addrs)            // 静态数组
+// 类 API：get_optional(name, path, ref val) / resolve_array_opt(...) 返回是否给出；
+// select_source(name, path, key, raw) 只取原文：0 未给出，1 override，2 plusarg
+
+// 路径别名：push 后查询 <path>[.子路径].<name> 时在完整路径与叶名之间多查 <alias>[.子路径].<name>
+aip_cmdline_alias::push("eth0.outer_ipv4", "eth0.ipv4");
+// ... 读取 ...
+aip_cmdline_alias::pop();
+
+// 枚举候选：只校验不抽样
+speed_e cands[$];
+`aip_enum_candidates("dut", speed_e, spd, cands)
+
+// 键使用记录：列出 prefix 子树下给出却没被查询的键（字典序）
+string unused[$];
+aip_cmdline_usage::record_begin();
+// ... 读取 ...
+aip_cmdline_usage::record_end("eth0", unused);
+```
+
+来源顺序为 override(完整、别名、叶名) 再 plusarg(完整、别名、叶名)，空值屏蔽其后来源。别名与键使用记录作用于
+标量、旧版数组、`aip_cmdline_query::present` 与 `_opt` 入口，schema 与严格 queue 不参与。详见 README §4
+「可选参数、路径别名与键使用记录」。
 
 #### 随机化语法（标量与数组）
 
@@ -460,7 +491,7 @@ cfg_t cfg;
 
 | 语法 | 含义 | 示例 |
 | --- | --- | --- |
-| `v` | 固定值；支持 `0x`/`0b`/`0o`、`N'h`、`_` 分隔、正负号。负值按目标类型位宽回绕（`-1` 进 `bit[7:0]` 得 `8'hff`） | `+dut.count=-0x20`、`+dut.count=-8'd10` |
+| `v` | 固定值；支持 `0x`/`0b`/`0o`、`N'h`、`_` 分隔、正负号。负值只用于有符号目标；无符号目标拒绝负数（含 `-0`）与越界值，报错给出允许范围 | `+dut.count=-0x20`、`+dut.count=-8'd10` |
 | `a,b,c` / `[a,b,c]` | 候选列表，随机选一个 | `+dut.count=[-3,-2,-1]` |
 | `[lo:hi]` | 闭区间随机 | `+dut.val=[1:10]` |
 | `{x:=w, [lo:hi]:=w}` | 权重随机：`:=` 每个值各占 w，`:/` 整段共占 w；外层 `{}` 或 `()` | `+dut.val={0:=40,[1:3]:=60}` |

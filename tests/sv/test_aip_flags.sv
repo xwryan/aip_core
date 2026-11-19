@@ -105,6 +105,7 @@ module test_aip_flags;
             "mixed":       begin command("set_param path=taf.bad value=A,0x2"); read_bad("taf"); end
             "bit_range":   begin command("set_param path=taf.bad value=B,HIGH"); read_bad8("taf"); end
             "value_range": begin command("set_param path=taf.bad value=0x100"); read_bad8("taf"); end
+            "negative":    begin command("set_param path=taf.bad value=-1"); read_bad8("taf"); end
             default:       $display("TAF_FAIL: unknown negative case %s", c);
         endcase
         $display("TAF_FAIL: negative case %s was accepted", c);
@@ -125,7 +126,7 @@ module test_aip_flags;
         check(read_spaced() == 64'h8000_0000_0000_0001, "names: spaces around items are ignored");
         check(read_num() == 64'h8000_0000_0000_0011, "number: 0x8000_0000_0000_0011 is the mask itself");
         check(read_sized() == 64'ha5, "number: sized literal 8'b1010_0101");
-        check(read_neg() == '1, "number: -1 wraps to all ones like aip_int");
+        check(read_neg() == '1, "number: 64-bit all-ones mask");
         check(read_dname() == 64'h10, "names win over literals: d0 is flag D0, not decimal 0");
         check(owner.get_randstate() == state, "parsing names and numbers consumes no random numbers");
         check(read_dflt() == 64'h8000_0000_0000_0002, "absent parameter keeps the macro default");
@@ -148,8 +149,8 @@ module test_aip_flags;
         check(read_mask("taf.h9") == 64'h8000_0000_0000_0000, "leaf set_param override for other paths");
         command("clear_param path=mask");
         command("clear_param path=taf.h0.pf1.vf2.i0.mask");
-        command("set_param path=taf.narrow value=-1");
-        check(read_narrow() == 8'hff, "8-bit target: -1 wraps to 0xff");
+        command("set_param path=taf.narrow value=0xff");
+        check(read_narrow() == 8'hff, "8-bit target: 0xff is the full mask");
 
         check(taf_flags::describe(64'h8000_0000_0000_0013) == "0x8000000000000013 (A|B|D0|HIGH)",
               $sformatf("describe lists names by bit: %s", taf_flags::describe(64'h8000_0000_0000_0013)));

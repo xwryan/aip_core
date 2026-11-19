@@ -3,20 +3,20 @@
 `AIP_CMDLINE_INTERNAL_INCLUDE_ERROR__USE_AIP_CMDLINE_SV
 `else
 
-// 判断 <path>.<name>（含 name[i]、name.x 及无路径叶名回退）是否被命令行或运行期 override 显式给出。
-// 只读键、不求值、不消费随机数，可在决定是否重建容器前调用。
+// 判断 <path>.<name>（含 name[i]、name.x、aip_cmdline_alias 别名及无路径叶名回退）是否被命令行或运行期
+// override 显式给出（空值也算给出）。只读键、不求值、不消费随机数，可在决定是否重建容器前调用；
+// 键使用记录开启时，三个候选根都记为已查询。
 class aip_cmdline_query;
     // check_unsigned=1：对每个命中的键检查获胜值（已含 override），出现负数即 hard fatal。
     static function bit present(string path, string name, bit check_unsigned = 0);
         string                args[$];
         string                keys[$];
-        string                roots[2];
+        string                roots[$];
         uvm_cmdline_processor clp;
         bit                   found;
 
         found    = 0;
-        roots[0] = {path, ".", name};
-        roots[1] = name;
+        aip_cmdline#(int)::candidate_keys(name, path, roots, 1);
         clp = aip_cmdline_source::get();
         clp.get_plusargs(args);
         aip_cmdline_override::get_keys(keys);

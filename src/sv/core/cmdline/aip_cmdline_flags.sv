@@ -112,7 +112,7 @@ class aip_cmdline_flags #(type E = int);
         return 0;
     endfunction
 
-    // 字面量形式与 aip_int 固定值相同（负数按目标位宽回绕）；不是整数字面量返回 0，越界直接 fatal。
+    // 字面量形式与 aip_int 无符号固定值相同：掩码不接受负数，也不回绕；不是整数字面量返回 0，越界直接 fatal。
     protected static function bit literal_mask(string token, int nbits, output bit [63:0] mask);
         aip_vec_t v;
         int       width;
@@ -123,8 +123,10 @@ class aip_cmdline_flags #(type E = int);
             error($sformatf("value %s exceeds the %0d-bit target", token, nbits));
         if (width > nbits)
             error($sformatf("explicit width in %s exceeds the %0d-bit target", token, nbits));
-        mask = negative ? -v[63:0] : v[63:0];
-        if (nbits < 64) mask &= (64'h1 << nbits) - 1;
+        if (negative)
+            error($sformatf("negative mask %s; flags are unsigned (allowed 0..%s)", token,
+                            (nbits == 64) ? "0xffffffffffffffff" : $sformatf("0x%0h", (64'h1 << nbits) - 1)));
+        mask = v[63:0];
         return 1;
     endfunction
 

@@ -64,7 +64,7 @@ function void aip_wait_policy::load_params(string path = "aip.wait");
 endfunction
 
 function bit aip_wait_policy::check_param(string path, string name, longint unsigned value);
-    // aip_int 把负数字面量读成无符号大数，同样落在上界之外而被拒绝。
+    // 负数与超出 64 位的值已在 aip_int 解析时 hard fatal；这里只检查 1..2^32-1。
     if ((value == 0) || (value > 64'hffff_ffff)) begin
         `uvm_fatal("WAIT_PARAM", $sformatf("%s.%s 必须为 1..2^32-1，当前值 %0d", path, name, value))
         return 0;

@@ -27,46 +27,80 @@ class aip_cmdline #(type T = int);
     } index_assign_t;
 
 
-    // 先查全名 path.name 再退 leaf name（与 plusarg 两级回退一致）；空串也算命中。
-    static function bit lookup_override(string name, string path, output string val);
-        string full = (path != "") ? {path, ".", name} : name;
-        if (aip_cmdline_override::has(full)) begin
-            val = aip_cmdline_override::get_val(full);
-            return 1;
+    // 候选键依次为完整 path.name、别名（aip_cmdline_alias）、叶名 name（path 非空时）；记录使用时全部记为已查询，
+    // as_root=1 时按容器根记录。
+    static function void candidate_keys(string name, string path, ref string keys[$], input bit as_root = 0);
+        string	alias_path;
+        keys.delete();
+        keys.push_back((path != "") ? {path, ".", name} : name);
+        if (path != "") begin
+            alias_path = aip_cmdline_alias::resolve(path);
+            if (alias_path != "") keys.push_back({alias_path, ".", name});
+            keys.push_back(name);
         end
-        if (path != "" && aip_cmdline_override::has(name)) begin
-            val = aip_cmdline_override::get_val(name);
-            return 1;
+        if (aip_cmdline_usage::recording())
+            foreach (keys[i]) begin
+                if (as_root) aip_cmdline_usage::note_root(keys[i]);
+                else aip_cmdline_usage::note(keys[i]);
+            end
+    endfunction
+
+    // 按 override(完整、别名、叶名) > plusarg(完整、别名、叶名) 选中第一个来源，空串也算命中并屏蔽其后来源；
+    // 返回 0=未给出、1=override、2=plusarg，key 为命中的键（未命中为完整键）。只读，不求值、不消耗随机数。
+    static function int select_source(string name, string path, output string key, output string val);
+        string					keys[$];
+        string					vals[$];
+        uvm_cmdline_processor	clp;
+        candidate_keys(name, path, keys);
+        foreach (keys[i]) begin
+            if (aip_cmdline_override::has(keys[i])) begin
+                key = keys[i];
+                val = aip_cmdline_override::get_val(keys[i]);
+                return 1;
+            end
+        end
+        clp = aip_cmdline_source::get();
+        foreach (keys[i]) begin
+            vals.delete();
+            clp.get_arg_values({"+", keys[i], "="}, vals);
+            if (vals.size() != 0) begin
+                key = keys[i];
+                val = vals[vals.size()-1];
+                return 2;
+            end
+        end
+        key = keys[0];
+        val = "";
+        return 0;
+    endfunction
+
+    // 只查 override：完整、别名、叶名依次查找；空串也算命中。
+    static function bit lookup_override(string name, string path, output string val);
+        string	keys[$];
+        candidate_keys(name, path, keys);
+        foreach (keys[i]) begin
+            if (aip_cmdline_override::has(keys[i])) begin
+                val = aip_cmdline_override::get_val(keys[i]);
+                return 1;
+            end
         end
         val = "";
         return 0;
     endfunction
 
-    // 按 override > +path.name > +name 查询，不消费 RNG；缺失必填项单独建上下文，报出实际缺失的键而非上一字段。
+    // 按 select_source 顺序取原文，不消费 RNG。
     static function string get_cmdline_string(string name, string path = "");
-        uvm_cmdline_processor clp = aip_cmdline_source::get();
-        string vals[$];
-        string full_name;
-        string override_val;
+        string	key;
+        string	val;
+        check_required(select_source(name, path, key, val), name, path);
+        return val;
+    endfunction
 
-        if (lookup_override(name, path, override_val))
-            return override_val;
-
-        if (path != "") begin
-            full_name = $sformatf("+%s.%s=", path, name);
-            clp.get_arg_values(full_name, vals);
-        end
-        if (vals.size() == 0) begin
-            full_name = $sformatf("+%s=", name);
-            clp.get_arg_values(full_name, vals);
-        end
-
-        if (vals.size() == 0 && global_required) begin
-            aip_cmdline_diagnostic::push_value(aip_cmdline_diagnostic::full_name(name, path), "<missing>");
-            error($sformatf("Required parameter +%s (path: %s) not provided", name, path));
-        end
-
-        return (vals.size() > 0) ? vals[vals.size()-1] : "";
+    // 必填开关打开且没有任何来源时，单独建上下文报出实际缺失的键，而非上一字段。
+    protected static function void check_required(int src, string name, string path);
+        if (src != 0 || !global_required) return;
+        aip_cmdline_diagnostic::push_value(aip_cmdline_diagnostic::full_name(name, path), "<missing>");
+        error($sformatf("Required parameter +%s (path: %s) not provided", name, path));
     endfunction
 
     // 解析失败即 hard fatal；VCS 需 -exitstatus 才会把失败传给 shell。
@@ -105,18 +139,43 @@ class aip_cmdline #(type T = int);
         return lo + (urand_svec(AIP_VEC_MAX_BITS) % span);
     endfunction
 
-    protected static function aip_svec_t parse_single_num(string s);
+    // 按 $typename 判断有符号性（T=string 特化也能编译）：带 unsigned 的为无符号，byte/shortint/int/longint/integer
+    // 与显式 signed 位向量为有符号，其余 bit/logic/reg 位向量为无符号。
+    static function bit t_signed();
+        string tn = $typename(T);
+        if (aip_str::str_find(tn, "unsigned") != -1) return 0;
+        if (aip_str::str_find(tn, "signed") != -1) return 1;
+        return tn == "byte" || tn == "shortint" || tn == "int" || tn == "longint" || tn == "integer";
+    endfunction
+
+    // 无符号目标的取值范围文字：64 位及以下给十进制上界，更宽给 2^N-1。
+    protected static function string unsigned_range();
+        int nbits = t_bits();
+        aip_vec_t max_v;
+        if (nbits > 64) return $sformatf("0..2^%0d-1", nbits);
+        max_v = (aip_vec_t'(1) << nbits) - 1;
+        return $sformatf("0..%0d", max_v[63:0]);
+    endfunction
+
+    // value_token=0 用于权重、步长等计数位置：它们沿用目标位宽检查，负数由各自规则报错。
+    // 无符号目标的取值位置拒绝负号（含 -0），不回绕；超出位宽同样报错，均为 hard fatal。
+    protected static function aip_svec_t parse_single_num(string s, bit value_token = 1);
         aip_vec_t  v;
         aip_svec_t r;
         int width;
         bit neg;
         int nbits = t_bits();
+        bit check_unsigned = value_token && is_integer_type() && !t_signed();
         if (!aip_str::str_to_vec(s, v, width, neg))
             error($sformatf("Invalid integer format: %s", s));
         if (nbits > 0 && nbits < AIP_VEC_MAX_BITS && (v >> nbits) != 0)
-            error($sformatf("value %s exceeds %0d-bit %s", s, nbits, $typename(T)));
+            error($sformatf("value %s exceeds %0d-bit %s%s", s, nbits, $typename(T),
+                            check_unsigned ? {" (allowed ", unsigned_range(), ")"} : ""));
         if (nbits > 0 && width > nbits)
             error($sformatf("explicit width in %s exceeds %0d-bit %s", s, nbits, $typename(T)));
+        if (check_unsigned && neg)
+            error($sformatf("negative value %s for unsigned %0d-bit %s (allowed %s)", s, nbits, $typename(T),
+                            unsigned_range()));
         r = aip_svec_t'({2'b00, v});
         return neg ? -r : r;
     endfunction
@@ -207,7 +266,7 @@ class aip_cmdline #(type T = int);
         if (right == "") error($sformatf("Empty weight value after stripping in part: %s", s));
 
         desc.mode = (pos_eq != -1) ? WEIGHT_EACH : WEIGHT_TOTAL;
-        desc.weight = parse_single_num(right);
+        desc.weight = parse_single_num(right, 0);
         if (desc.weight < 0)
             error($sformatf("Weight must be >= 0 in item[%0d] '%s'", item_index, s));
 
@@ -306,7 +365,7 @@ class aip_cmdline #(type T = int);
         desc.mode = is_inc ? INCREMENT : DECREMENT;
         desc.start = parse_single_num(tokens[0]);
         desc.max = parse_single_num(tokens[1]);
-        desc.step = (tokens.size() >= 3) ? parse_single_num(tokens[2]) : 1;
+        desc.step = (tokens.size() >= 3) ? parse_single_num(tokens[2], 0) : 1;
         if (desc.step <= 0) error($sformatf("inc/dec step must be > 0: %s", s));
 
         if (is_inc && desc.start > desc.max) error("Increment start > end");
@@ -331,7 +390,7 @@ class aip_cmdline #(type T = int);
             error($sformatf("Invalid seq:/perm: format: %s", s));
         a = parse_single_num(tokens[0]);
         b = parse_single_num(tokens[1]);
-        step = (tokens.size() == 3) ? parse_single_num(tokens[2]) : 1;
+        step = (tokens.size() == 3) ? parse_single_num(tokens[2], 0) : 1;
         if (step <= 0) error($sformatf("seq: step must be > 0: %s", s));
         if (a > b) error($sformatf("seq:/perm: start > end: %s", s));
         cnt = (b - a) / step + 1;
@@ -684,40 +743,55 @@ class aip_cmdline #(type T = int);
 
     // 非空随机 override 与 plusarg 走同一抽样路径（每次读取重新抽）；固定 override 走字面量快路径，不消费 RNG。
     protected static function void get_single_value_impl(string name, string path, T default_val, ref T val);
-        string	parts[];
         string	s;
-        bit	is_ov;
+        string	key;
+        int		src;
 
-        is_ov = lookup_override(name, path, s);   // 命中则 s=override 值(可能空串)
-        if (!is_ov)
-            s = get_cmdline_string(name, path);
+        src = select_source(name, path, key, s);   // 命中 override 时 s 可能为空串
+        check_required(src, name, path);
 
         aip_cmdline_diagnostic::select_value(aip_cmdline_diagnostic::full_name(name, path), s);
 
-        if (is_ov && s == "") begin
+        if (src == 1 && s == "") begin
             T	zero; // 空 override 取类型初值（含 string 空串与四态类型），不回退宏默认值
             val = zero;
             return;
         end
-        if (s == "") begin
-            val = default_val;
-            return;
-        end
+        val = default_val;
+        if (s != "") eval_selected(s, src == 1, val);
+    endfunction
+
+    // 对已选中的非空原文求值：固定 override 走字面量快路径；否则按顶层逗号拆分、抽一个候选再解析。
+    // 拆分结果为空（如全空白）时保持 val。
+    protected static function void eval_selected(string s, bit is_ov, ref T val);
+        string	parts[];
         if (is_ov && is_literal_candidate(s, $typename(T) == "string")) begin
             val = parse_single_value(s);
             return;
         end
         split_overall_string(s, parts);
-        if(parts.size == 0) begin
-            val = default_val;
-            return;
-        end
-        else begin
+        if (parts.size() != 0) begin
             int	idx;
-            idx = $urandom_range(0,parts.size-1);
+            idx = $urandom_range(0, parts.size()-1);
             val = parse_value(parts[idx]);
         end
+    endfunction
 
+    // 可选参数：按 select_source 选中一个来源（含别名），缺失或空值（含空 override）保持 val 并返回 0；
+    // 否则按 get_single_value 的同一规则求值写入 val 并返回 1。必填开关 global_required 不作用于可选参数。
+    static function bit get_optional(string name, string path, ref T val,
+                                     input string source_file = "", input int source_line = 0);
+        string	s;
+        string	key;
+        int		src;
+        aip_cmdline_diagnostic::push(aip_cmdline_diagnostic::full_name(name, path), source_file, source_line);
+        src = select_source(name, path, key, s);
+        if (src != 0 && s != "") begin
+            aip_cmdline_diagnostic::select_value(key, s);
+            eval_selected(s, src == 1, val);
+        end
+        aip_cmdline_diagnostic::pop();
+        return src != 0 && s != "";
     endfunction
 
     // fixed_size=-1：动态数组，长度由 .size/整体列表/最大索引决定；>=0：静态数组，.size 与超长列表报错。
@@ -805,18 +879,30 @@ class aip_cmdline #(type T = int);
 
         begin
             int    ov_p_v[int]; string ov_p_s[int];
+            int    ov_a_v[int]; string ov_a_s[int];
             int    ov_l_v[int]; string ov_l_s[int];
             int    pa_p_v[int]; string pa_p_s[int];
+            int    pa_a_v[int]; string pa_a_s[int];
+            string alias_path;
+            string roots[$];
 
+            alias_path = (path != "") ? aip_cmdline_alias::resolve(path) : "";
+            candidate_keys(name, path, roots, 1);   // 记录使用：根、控制键与索引都归入容器根
             collect_indexed_overrides(name, path, ov_p_v, ov_p_s);
+            if (alias_path != "")
+                collect_indexed_overrides(name, alias_path, ov_a_v, ov_a_s);
             collect_indexed_overrides(name, "",   ov_l_v, ov_l_s);
             if (path != "")
                 collect_indexed_assignments(name, path, pa_p_v, pa_p_s);
+            if (alias_path != "")
+                collect_indexed_assignments(name, alias_path, pa_a_v, pa_a_s);
             collect_indexed_assignments(name, "", no_path_vals, no_path_strs);
 
             foreach (ov_p_v[i])       if (!index_vals.exists(i)) begin index_vals[i]=i; index_strs[i]=ov_p_s[i];       end
+            foreach (ov_a_v[i])       if (!index_vals.exists(i)) begin index_vals[i]=i; index_strs[i]=ov_a_s[i];       end
             foreach (ov_l_v[i])       if (!index_vals.exists(i)) begin index_vals[i]=i; index_strs[i]=ov_l_s[i];       end
             foreach (pa_p_v[i])       if (!index_vals.exists(i)) begin index_vals[i]=i; index_strs[i]=pa_p_s[i];       end
+            foreach (pa_a_v[i])       if (!index_vals.exists(i)) begin index_vals[i]=i; index_strs[i]=pa_a_s[i];       end
             foreach (no_path_vals[i]) if (!index_vals.exists(i)) begin index_vals[i]=i; index_strs[i]=no_path_strs[i]; end
         end
         foreach (index_vals[i]) begin
@@ -905,16 +991,60 @@ class aip_cmdline #(type T = int);
         resolve_array(name, path, default_val, -1, arr, source_file, source_line);
     endfunction
 
+    // 键等于容器根，或是根的控制子键/元素索引（根后紧跟 "." 或 "["）；相似前缀如 options_extra 不算。
+    static function bit key_under_root(string key, string root);
+        if (key == root) return 1;
+        return key.len() > root.len() && key.substr(0, root.len()-1) == root &&
+               (key[root.len()] == "." || key[root.len()] == "[");
+    endfunction
+
+    // 可选容器：先选根再解析，避免同一容器的整体值、控制键与索引分散在不同路径下被合并。候选根依次为完整
+    // path.name、别名、叶名；所有 override 键先于 plusarg 匹配，第一个有键落在其下的根胜出。选中后按 resolve_array
+    // 解析该根（显式配置替换整个容器，未覆盖元素取 default_val）；三个根下都没有键时保持 arr 并返回 0。
+    static function bit resolve_array_opt(
+        string name, string path, T default_val, int fixed_size, ref T arr[],
+        input string source_file = "", input int source_line = 0
+    );
+        string					roots[$];
+        string					keys[$];
+        string					args[$];
+        uvm_cmdline_processor	clp;
+        candidate_keys(name, path, roots, 1);
+        aip_cmdline_override::get_keys(keys);
+        foreach (roots[i]) foreach (keys[j])
+            if (key_under_root(keys[j], roots[i])) begin
+                resolve_array(roots[i], "", default_val, fixed_size, arr, source_file, source_line);
+                return 1;
+            end
+        clp = aip_cmdline_source::get();
+        clp.get_args(args);
+        foreach (roots[i]) foreach (args[j]) begin
+            int	eq;
+            if (args[j].len() < 2 || args[j][0] != "+") continue;
+            eq = aip_str::str_find(args[j], "=");
+            if (eq < 0) continue;
+            if (key_under_root(args[j].substr(1, eq - 1), roots[i])) begin
+                resolve_array(roots[i], "", default_val, fixed_size, arr, source_file, source_line);
+                return 1;
+            end
+        end
+        return 0;
+    endfunction
+
 endclass
 
 // 枚举解析：先校验全部候选再抽样，避免非法候选因本次未被抽中而隐藏。
 class aip_cmdline_enum;
-    static function logic [1023:0] resolve_bits(string s, string names[$], logic [1023:0] values[$]);
+    // 校验整条表达式并按出现顺序返回全部候选值，不消耗随机数。逗号候选可写成员名（不区分大小写）或等于某成员值的
+    // 整数字面量（如 0x0A，负值按二进制补码比较）；整串为 rand 时取全部成员，但同名成员优先。范围、权重等数值随机
+    // 语法不适用于枚举；空候选、未知名称或不对应成员的数值都 hard fatal。
+    static function void candidates(string s, string names[$], logic [1023:0] values[$],
+                                    ref logic [1023:0] out[$]);
         string cleaned, candidate;
-        logic [1023:0] candidates[$], result;
         int start, stop;
         bit matched;
 
+        out.delete();
         aip_cmdline_diagnostic::push_expression(s);
         cleaned = aip_str::strip(s);
         if (cleaned == "")
@@ -925,6 +1055,12 @@ class aip_cmdline_enum;
                 "enum names/values mapping is empty or has mismatched lengths",
                 `__FILE__, `__LINE__);
 
+        if (aip_str::lower(cleaned) == "rand" && !has_name(names, "rand")) begin
+            foreach (values[i]) out.push_back(values[i]);
+            aip_cmdline_diagnostic::pop();
+            return;
+        end
+
         start = 0;
         while (start <= cleaned.len()) begin
             stop = aip_str::str_find(cleaned, ",", start);
@@ -934,21 +1070,50 @@ class aip_cmdline_enum;
             matched = 0;
             foreach (names[i]) begin
                 if (aip_str::lower(names[i]) == aip_str::lower(candidate)) begin
-                    candidates.push_back(values[i]);
+                    out.push_back(values[i]);
                     matched = 1;
                     break;
+                end
+            end
+            if (!matched && aip_cmdline#(int)::is_literal_candidate(candidate)) begin
+                aip_vec_t		magnitude;
+                logic [1023:0]	number;
+                int				width;
+                bit				negative;
+                if (aip_str::str_to_vec(candidate, magnitude, width, negative)) begin
+                    number = negative ? ~magnitude + 1'b1 : magnitude;
+                    foreach (values[i]) begin
+                        if (number === values[i]) begin
+                            out.push_back(values[i]);
+                            matched = 1;
+                            break;
+                        end
+                    end
                 end
             end
             if (!matched)
                 aip_cmdline_diagnostic::report("AIP_CORE[cmdline_enum] Error",
                     $sformatf("candidate[%0d] '%s' not found in enum",
-                              candidates.size(), candidate), `__FILE__, `__LINE__);
+                              out.size(), candidate), `__FILE__, `__LINE__);
             if (stop == cleaned.len()) break;
             start = stop + 1;
         end
-        result = candidates[$urandom_range(candidates.size()-1)];
+        aip_cmdline_diagnostic::pop();
+    endfunction
+
+    // 全部候选校验通过后等概率抽一个（固定消耗一次随机数）。
+    static function logic [1023:0] resolve_bits(string s, string names[$], logic [1023:0] values[$]);
+        logic [1023:0] all[$], result;
+        aip_cmdline_diagnostic::push_expression(s);
+        candidates(s, names, values, all);
+        result = all[$urandom_range(all.size()-1)];
         aip_cmdline_diagnostic::pop();
         return result;
+    endfunction
+
+    protected static function bit has_name(string names[$], string name);
+        foreach (names[i]) if (aip_str::lower(names[i]) == name) return 1;
+        return 0;
     endfunction
 
     // 兼容 int 枚举接口：经 resolve_bits 解析后取低 32 位。

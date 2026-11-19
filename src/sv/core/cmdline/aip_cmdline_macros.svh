@@ -124,7 +124,125 @@
             `aip_info(("[aip_cmdline] param '%s' (scope='%s') = %s", `"name`", path, aip_cmdline_flags#(E)::describe(name))); \
     end
 
+// 可选参数（_opt）：变量当前值即默认值。按 override(完整、别名、叶名) > plusarg(完整、别名、叶名) 选一个来源，
+// 缺失或空值（含空 override）都保持变量不变；给出非空值时按对应基础宏的语法求值写入，并把 given 置 1
+// （未给出时不改 given，多个参数可累计到同一标志）。只在写入时打印注册日志。别名见 aip_cmdline_alias。
+// 例：`aip_int_opt("eth0.outer_ipv4", bit [7:0], ttl, changed) 读 +eth0.outer_ipv4.ttl=[32:64]。
+`define aip_int_opt(path,rtype=int,name,given=__aip_opt_given) \
+    begin \
+        bit __aip_opt_given; \
+        if (aip_cmdline#(rtype)::get_optional(`"name`", path, name, `__FILE__, `__LINE__)) begin \
+            given = 1; \
+            if (aip_cmdline_print_control::should_print(`"name`", path)) \
+                `aip_info(("[aip_cmdline] param '%s' (scope='%s') = %0d (0x%0h)", `"name`", path, name, name)); \
+        end \
+    end
+
+`define aip_string_opt(path,name,given=__aip_opt_given) \
+    begin \
+        bit __aip_opt_given; \
+        if (aip_cmdline#(string)::get_optional(`"name`", path, name, `__FILE__, `__LINE__)) begin \
+            given = 1; \
+            if (aip_cmdline_print_control::should_print(`"name`", path)) \
+                `aip_info(("[aip_cmdline] param '%s' (scope='%s') = '%s'", `"name`", path, name)); \
+        end \
+    end
+
+// 枚举：成员名（不区分大小写）、等于成员值的整数字面量，或整串 rand（全部成员）；逗号候选先全部校验再抽一个。
+// 未给出时不遍历枚举成员。
+`define aip_enum_opt(path, enum_type, _aip_v, given=__aip_opt_given) \
+    begin \
+        bit __aip_opt_given; \
+        string __aip_key; \
+        string __aip_raw; \
+        aip_cmdline_diagnostic::push(aip_cmdline_diagnostic::full_name(`"_aip_v`", path), `__FILE__, `__LINE__); \
+        if (aip_cmdline#(int)::select_source(`"_aip_v`", path, __aip_key, __aip_raw) != 0 && __aip_raw != "") begin \
+            string __enum_names[$]; \
+            logic [1023:0] __enum_bits[$]; \
+            enum_type __e_iter; \
+            __enum_names.delete(); \
+            __enum_bits.delete(); \
+            __e_iter = __e_iter.first(); \
+            do begin \
+                __enum_names.push_back(__e_iter.name()); \
+                __enum_bits.push_back(__e_iter); \
+                if (__e_iter == __e_iter.last()) break; \
+                __e_iter = __e_iter.next(); \
+            end while (1); \
+            aip_cmdline_diagnostic::select_value(__aip_key, __aip_raw); \
+            _aip_v = enum_type'(aip_cmdline_enum::resolve_bits(__aip_raw, __enum_names, __enum_bits)); \
+            given = 1; \
+            if (aip_cmdline_print_control::should_print(`"_aip_v`", path)) \
+                `aip_info(("[aip_cmdline] param '%s' (scope='%s') = %s (%0d)", `"_aip_v`", path, _aip_v.name(), _aip_v)); \
+        end \
+        aip_cmdline_diagnostic::pop(); \
+    end
+
+// 列出 path.name 的枚举表达式可能取到的全部成员（按候选顺序，可重复），用于提前判断取值范围；未给出或空值时
+// out 为空。规则同 aip_enum_opt，只校验不抽样，不消耗随机数。out 为 enum_type 队列。
+`define aip_enum_candidates(path, enum_type, _aip_n, out) \
+    begin \
+        string __aip_key; \
+        string __aip_raw; \
+        out.delete(); \
+        if (aip_cmdline#(int)::select_source(`"_aip_n`", path, __aip_key, __aip_raw) != 0 && __aip_raw != "") begin \
+            string __enum_names[$]; \
+            logic [1023:0] __enum_bits[$]; \
+            logic [1023:0] __enum_out[$]; \
+            enum_type __e_iter; \
+            __enum_names.delete(); \
+            __enum_bits.delete(); \
+            __e_iter = __e_iter.first(); \
+            do begin \
+                __enum_names.push_back(__e_iter.name()); \
+                __enum_bits.push_back(__e_iter); \
+                if (__e_iter == __e_iter.last()) break; \
+                __e_iter = __e_iter.next(); \
+            end while (1); \
+            aip_cmdline_diagnostic::push_value(__aip_key, __aip_raw); \
+            aip_cmdline_enum::candidates(__aip_raw, __enum_names, __enum_bits, __enum_out); \
+            aip_cmdline_diagnostic::pop(); \
+            foreach (__enum_out[__i]) out.push_back(enum_type'(__enum_out[__i])); \
+        end \
+    end
+
+// 容器（动态数组或 queue）：在完整、别名、叶名三个根中先选根（override 根优先于 plusarg 根），选中后按
+// aip_int_list 规则解析并整体替换，未覆盖元素取 default_val；三个根下都没有键时保持原内容。
+`define aip_int_list_opt(path,rtype=int,name,default_val=0,given=__aip_opt_given) \
+    begin \
+        bit __aip_opt_given; \
+        rtype __aip_sv[]; \
+        if (aip_cmdline#(rtype)::resolve_array_opt(`"name`", path, default_val, -1, __aip_sv, `__FILE__, `__LINE__)) begin \
+            name = __aip_sv; \
+            given = 1; \
+            if (aip_cmdline_print_control::should_print(`"name`", path)) begin \
+                string __aip_ps; \
+                __aip_ps = ""; \
+                foreach (__aip_sv[__i]) __aip_ps = {__aip_ps, $sformatf("%0d ", __aip_sv[__i])}; \
+                `aip_info(("[aip_cmdline] array '%s' (scope='%s') [%0d] %s= %s", `"name`", path, __aip_sv.size(), aip_cmdline#(rtype)::last_array_ctrl, __aip_ps)); \
+            end \
+        end \
+    end
+
+// 静态数组：同 aip_int_list_opt，长度为声明长度（不接受 .size）。
+`define aip_int_slist_opt(path,rtype=int,name,default_val=0,given=__aip_opt_given) \
+    begin \
+        bit __aip_opt_given; \
+        rtype __aip_sv[]; \
+        if (aip_cmdline#(rtype)::resolve_array_opt(`"name`", path, default_val, $size(name), __aip_sv, `__FILE__, `__LINE__)) begin \
+            foreach (name[__i]) name[__i] = __aip_sv[__i]; \
+            given = 1; \
+            if (aip_cmdline_print_control::should_print(`"name`", path)) begin \
+                string __aip_ps; \
+                __aip_ps = ""; \
+                foreach (__aip_sv[__i]) __aip_ps = {__aip_ps, $sformatf("%0d ", __aip_sv[__i])}; \
+                `aip_info(("[aip_cmdline] array '%s' (scope='%s') [%0d] %s= %s", `"name`", path, __aip_sv.size(), aip_cmdline#(rtype)::last_array_ctrl, __aip_ps)); \
+            end \
+        end \
+    end
+
 // 旧版逐字段结构体宏（新代码推荐 schema API）：紧凑值 +path.name={field=v,...} 先赋，点号 +path.name.field=v 再覆盖。
+// aip_struct_int 按成员自身类型解析，位宽与无符号检查同 aip_int。
 // begin/end 之间可执行任意用户代码，故诊断栈只在同步查询/解析期间保留。
 // 配置查询不能放入声明初始化式：module initial 内的静态初始化可能早于用户 set_val。
 `define aip_struct_begin(path, name) \
@@ -152,7 +270,7 @@
             foreach (__compact_keys[__fi]) \
                 if (__compact_keys[__fi] == `"field`") begin __cv = __compact_vals[__fi]; break; end \
             if (__cv != "") \
-                svar.field = aip_cmdline#(int)::parse_value(__cv); \
+                svar.field = aip_cmdline#(type(svar.field))::parse_value(__cv); \
             else \
                 svar.field = default_val; \
             begin \
@@ -160,7 +278,7 @@
                 __dv = aip_cmdline#(int)::get_cmdline_string(`"field`", __struct_path); \
                 aip_cmdline_diagnostic::select_value({__struct_path, ".", `"field`"}, __dv); \
                 if (__dv != "") \
-                    svar.field = aip_cmdline#(int)::parse_value(__dv); \
+                    svar.field = aip_cmdline#(type(svar.field))::parse_value(__dv); \
             end \
             if (aip_cmdline_print_control::should_print(`"field`", __struct_path)) \
                 `aip_info(("[aip_cmdline] struct member '%s' (scope='%s') = %0d (0x%0h)", `"field`", __struct_path, svar.field, svar.field)); \

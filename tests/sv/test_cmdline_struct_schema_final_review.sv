@@ -458,7 +458,7 @@ module test_cmdline_struct_schema_final_review;
     if ($test$plusargs("AIP_FINAL_UNIQUE_DYNAMIC_CAST")) begin
       aip_cmdline_override::set_val("f4cast.narrow_values.size", "3");
       aip_cmdline_override::set_val("f4cast.narrow_values.each",
-                                    "-1,8'hff,1");
+                                    "255,8'hff,1");
       aip_cmdline_override::set_val("f4cast.narrow_values.unique", "1");
       `aip_struct_apply("f4cast", final_unique_t, unique_cfg)
       $display("CMDLINE_STRUCT_FINAL_UNIQUE_DYNAMIC_CAST_UNEXPECTED_PASS");

@@ -628,7 +628,7 @@ int tbl[4];     `aip_int_slist("dut", int, tbl, 0)        // 静态数组 +dut.t
 string names[]; `aip_str_list("dut", names, "")           // 字符串数组（静态用 aip_str_slist）
 
 typedef enum {FAST, SLOW} speed_e;
-speed_e spd;    `aip_enum("dut", speed_e, spd, FAST)      // +dut.spd=SLOW
+speed_e spd;    `aip_enum("dut", speed_e, spd, FAST)      // +dut.spd=SLOW / 1 / rand
 
 typedef enum {CSUM = 0, TSO = 11, V1 = 32} feat_e;        // 成员值为位号
 bit [63:0] feat; `aip_flags("dut", feat_e, feat, 0)       // +dut.feat=V1,CSUM 或 +dut.feat=0x100000001
@@ -644,13 +644,73 @@ cfg_t cfg;
 
 path 支持多级，如 `"eth.ipv4.tcp"` → `+eth.ipv4.tcp.len=…`。
 
+整数目标按类型区分有无符号：`int`/`byte`/`shortint`/`longint`/`integer` 与 `bit signed [N:0]` 可写负数；
+`bit`/`logic` 位向量与 `* unsigned` 是无符号目标，负数（含 `-0`、`-8'h1`）与超出位宽的值都 hard fatal，不截断、
+不回绕，报错给出参数名、原文与允许范围，例如：
+
+```text
+[FATAL] cfg.sv(42) ... AIP_CORE[cmdline] parser Error: negative value -1 for unsigned 64-bit longint unsigned (allowed 0..18446744073709551615) parameter='+dut.timeout_ns' value='-1'
+```
+
+该规则作用于 plusarg、`set_param` 运行期覆盖、随机语法里的每个取值（范围端点、列表项、权重组左值、`inc/dec`
+端点）、数组整体值/索引/`.each`、严格 queue、schema 字段、旧版 `aip_struct_int`（按成员自身类型解析）与
+`aip_flags` 掩码；权重与步长仍按各自规则报错。需要全 1 时写出上界（如 `8'hff`、`64'hFFFF_FFFF_FFFF_FFFF`）。
+
+#### 可选参数、路径别名与键使用记录
+
+`_opt` 宏用于"给出才改、没给保持"的配置：变量当前值即默认值，可选的 `given` 标志告知是否给出。
+
+```systemverilog
+bit changed;
+`aip_int_opt("eth0.outer_ipv4", bit [7:0], ttl, changed)    // +eth0.outer_ipv4.ttl=[32:64]
+`aip_string_opt("dut", label)
+`aip_enum_opt("dut", speed_e, spd)                           // 名称 / 成员值 / rand
+`aip_int_list_opt("dut", byte unsigned, opts)                // 动态数组或 queue
+`aip_int_slist_opt("dut", bit [31:0], addrs)                 // 静态数组
+void'(aip_cmdline#(bit [7:0])::get_optional("code", path, icmp_code));  // 键名与变量名不同时
+```
+
+- 来源按 override(完整、别名、叶名) 再 plusarg(完整、别名、叶名) 选一个；缺失或空值（含空 override）都保持变量，
+  空值同时屏蔽其后来源（`aip_int` 的空 override 仍取类型初值，规则不变）。非空值按对应基础宏的语法求值，非法即 hard fatal。
+- `given`（最后一个可选参数）只在写入时置 1、未给出时不改，便于多个参数累计到同一标志；不传则忽略。
+- 只在写入时打印注册日志；`global_required` 不作用于 `_opt`。
+- 容器先选根再解析：完整、别名、叶名三个根中，第一个有键（根本身、`根.控制键` 或 `根[i]`，override 先于 plusarg）
+  的根胜出，按 `aip_int_list` 规则整体替换，未覆盖元素取 `default_val`；不同根下的键不合并，都没有键时保持原内容。
+
+路径别名让同一组件既能用完整路径也能用短路径配置：
+
+```systemverilog
+aip_cmdline_alias::push("eth0.outer_ipv4", "eth0.ipv4");   // 查询 eth0.outer_ipv4[.子路径].x 时多查 eth0.ipv4[.子路径].x
+layer.load_params("eth0.outer_ipv4");
+aip_cmdline_alias::pop();
+```
+
+别名插在完整路径与叶名之间，作用于标量、旧版数组、`aip_cmdline_query::present` 与上述 `_opt` 宏；可嵌套（最近一次
+push 优先，别名为空表示本层不提供别名），须在同一段零时间代码内成对 pop。schema 与严格 queue 入口不查别名。
+
+枚举（`aip_enum`、`aip_enum_opt`、旧版 `aip_struct_enum`）的逗号候选除成员名外还接受等于成员值的整数字面量
+（如 `0x0A`），整串 `rand` 表示全部成员（有成员恰名为 `rand` 时按名称）；范围/权重语法不适用。
+`` `aip_enum_candidates(path, E, name, out) `` 只校验不抽样，把可能取到的成员放进 `E` 队列 `out`（未给出时为空）。
+
+键使用记录用于发现"给了却没人读"的配置（拼错的键、路径层级不对的键）：
+
+```systemverilog
+string unused[$];
+aip_cmdline_usage::record_begin();
+cfg.load_params("eth0");                      // 期间的查询都会记下查过的键
+aip_cmdline_usage::record_end("eth0", unused);  // eth0 子树下由 override/plusarg 给出、却没被查询的键，按字典序
+```
+
+记录覆盖标量、旧版数组、`present` 与 `_opt` 入口（容器按根记录），只读键名，不求值、不消耗随机数；
+可嵌套，schema 与严格 queue 入口不参与。
+
 #### 位标志（aip_flags）
 
 `aip_flags(path, E, name, default_val)` 把 `+path.name` 读成位掩码：`E` 是成员值为位号的枚举，
 目标变量最多 64 位。值有两种写法，不能混写：
 
 - 逗号分隔的成员名（不区分大小写，可带空格、可重复），结果为各 `1 << 成员值` 之或，如 `+dut.feat=V1,CSUM`；
-- 单个整数字面量，即掩码本身，写法同 `aip_int` 固定值（`0x`、`N'h`、`_` 分隔，负数按目标位宽回绕），
+- 单个整数字面量，即掩码本身，写法同 `aip_int` 无符号固定值（`0x`、`N'h`、`_` 分隔，不接受负数），
   如 `+dut.feat=0x100000001`。
 
 成员名优先于数字解析，形如 `D0` 的成员名不会被读成十进制 0。来源优先级、`set_param`/`clear_param`
@@ -739,7 +799,7 @@ function/task，或使用 `randomize() with` 完成。
 
 | 语法 | 含义 | 示例 |
 |---|---|---|
-| `v` | 固定值；支持 `0x`/`0b`/`0o`、`N'h`、`_` 分隔、正负号。负值按目标位宽回绕（`-1` 进 `bit[7:0]` 得 `8'hff`） | `+dut.count=-0x20`、`+dut.count=-8'd10` |
+| `v` | 固定值；支持 `0x`/`0b`/`0o`、`N'h`、`_` 分隔、正负号。负值只用于有符号目标；无符号目标（`bit[7:0]`、`int unsigned` 等）拒绝负数与越界值 | `+dut.count=-0x20`、`+dut.count=-8'd10` |
 | `a,b,c` / `[a,b,c]` | 候选列表，随机选一个 | `+dut.count=[-3,-2,-1]` |
 | `[lo:hi]` | 闭区间随机 | `+dut.val=[1:10]` |
 | `{x:=w, [lo:hi]:=w}` | 权重随机：`:=` 每个值各占 w，`:/` 整段共占 w；权重允许为 0，整组至少有一项为正；外层 `{}` 或 `()` | `+dut.val={0:=0,[1:3]:=60}` |
@@ -784,7 +844,7 @@ function/task，或使用 `randomize() with` 完成。
 `aip_error` 本身只打印 ERROR，不会终止仿真；普通 `aip_fatal` 仍保留原有 UVM 报告行为。
 解析器使用日志层的专用 hard-fatal 路径，不受 UVM report catcher、severity/action 降级影响。
 更新后需要重新编译；VCS 回归脚本要通过退出码识别失败，必须加 `-exitstatus`，例如
-`simv -no_save -exitstatus`。53 上的 W-2024.09-SP1 在不加此选项时，即使 `$fatal(1)` 已经
+`simv -no_save -exitstatus`。VCS W-2024.09-SP1 在不加此选项时，即使 `$fatal(1)` 已经
 停止仿真，也可能返回 0；`-no_save` 只用于避免自动快照，不决定错误退出码。
 不要用 `|| true` 吞掉失败。上述诊断覆盖已执行的解析/校验；不会改变既有优先级规则，
 被覆盖而不再使用的配置和不属于本 schema 的参数仍按原规则处理。
@@ -846,7 +906,7 @@ VCS 值。以 argv 列表直接执行时写 `- "+dut.weight={0:=40,[1:3]:=60}"`�
 | 整数权重 | `{50:=20,[100:200]:/80}`；`:=` 为每个候选的权重，`:/` 为整段权重 |
 | 整数步长候选 | `inc:2:8:3` / `dec:8:2:3`，每次从 `2,5,8` 中抽样，并非逐次递增/递减 |
 | `aip_real` | `2.5e2`、`[50.0:200.0]`、`1.25,2.5,5.0`、权重组和 `inc/dec`；不支持整数的 `rand` |
-| `aip_string` / `aip_enum` | 字符串或枚举名称的逗号候选列表；枚举名称不区分大小写 |
+| `aip_string` / `aip_enum` | 字符串或枚举名称的逗号候选列表；枚举名称不区分大小写，另接受等于成员值的整数字面量与整串 `rand` |
 | `aip_flags` | 逗号分隔的成员名（取各位之或，不是候选列表）或单个整数掩码；不支持随机语法 |
 | 数组、队列、schema | 沿用各入口已有的列表、字段和控制键规则；整数 `seq/perm` 只用于支持它们的数组/队列入口 |
 
@@ -893,7 +953,7 @@ plusarg 原有抽样路径保持不变；两侧能力一致不意味着穿插固
 
 | 内部文件 | 职责 |
 |---|---|
-| `aip_cmdline_context.sv` | 前向类型声明、运行时 override 表、嵌套解析诊断上下文 |
+| `aip_cmdline_context.sv` | 前向类型声明、运行时 override 表、路径别名、键使用记录、嵌套解析诊断上下文 |
 | `aip_cmdline_scalar.sv` | 基础类型解析、原有数组解析、旧版 compact struct 辅助、参数打印控制 |
 | `aip_cmdline_flags.sv` | 枚举位标志（`aip_flags`）解析与掩码按成员名格式化 |
 | `aip_struct_runtime.sv` | schema 元数据、字段规则查找、公共校验与容器规则处理 |
@@ -923,7 +983,7 @@ FATAL 诊断行为；没有新增跨调用缓存，也没有改变 Tcl override 
 实际赋值进一步分离，属于后续优化，不是本次拆分已实现的能力。
 
 优化前的测量方法、复现命令和实测记录见 [参数解析性能基准](tests/bench/README.md)。
-基准在 53 上运行，不修改生产解析器，也不等同于真实 DUT 仿真的整体性能评估。
+基准在专用 VCS 主机上运行，不修改生产解析器，也不等同于真实 DUT 仿真的整体性能评估。
 
 ---
 

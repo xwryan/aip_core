@@ -7,7 +7,8 @@
 // source order but using schema normalization, typed parsing and the allocation budget. TARGET itself never
 // crosses a helper ref boundary; only the temporary dynamic representation does.
 class aip_strict_int_queue_runtime #(type T = int);
-    static function aip_svec_t strict_literal(string token, string path);
+    // value_token=0 用于权重与步长（负数由各自规则报错）；取值位置在无符号目标上拒绝负号（含 -0），不回绕。
+    static function aip_svec_t strict_literal(string token, string path, bit value_token = 1);
         aip_vec_t value;
         aip_svec_t result;
         int explicit_width;
@@ -22,8 +23,19 @@ class aip_strict_int_queue_runtime #(type T = int);
             aip_struct_runtime::fail($sformatf(
                 "%s integral token '%s' exceeds %0d-bit target",
                 path, token, $bits(T)));
+        if (value_token && negative && !aip_struct_typed_key#(T)::declared_signed())
+            aip_struct_runtime::fail($sformatf(
+                "%s integral token '%s' is negative for unsigned %0d-bit target (allowed %s)",
+                path, token, $bits(T), unsigned_range()));
         result = aip_svec_t'({2'b00, value});
         return negative ? -result : result;
+    endfunction
+
+    static function string unsigned_range();
+        aip_vec_t max_v;
+        if ($bits(T) > 64) return $sformatf("0..2^%0d-1", $bits(T));
+        max_v = (aip_vec_t'(1) << $bits(T)) - 1;
+        return $sformatf("0..%0d", max_v[63:0]);
     endfunction
 
     static function void validate_range(string expr, string path);
@@ -69,7 +81,7 @@ class aip_strict_int_queue_runtime #(type T = int);
         end else begin
             void'(strict_literal(left, path));
         end
-        weight = strict_literal(right, path);
+        weight = strict_literal(right, path, 0);
         if (weight < 0)
             aip_struct_runtime::fail($sformatf(
                 "%s integral weight must be >= 0 in item '%s'", path, item));
@@ -123,7 +135,7 @@ class aip_strict_int_queue_runtime #(type T = int);
             start_value = strict_literal(parts[0], path);
             end_value = strict_literal(parts[1], path);
             step_value = (parts.size() == 3) ?
-                         strict_literal(parts[2], path) : 1;
+                         strict_literal(parts[2], path, 0) : 1;
             if (step_value <= 0 ||
                 (is_inc && start_value > end_value) ||
                 (!is_inc && start_value < end_value))

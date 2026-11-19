@@ -125,15 +125,15 @@ module test_cmdline_struct_schema_integration;
     check(boundary_cfg.value == 13, "ROOT boundary excludes cfg2-style prefix");
 
     aip_cmdline_override::set_val("scope.signed_q", "255,-255");
-    aip_cmdline_override::set_val("scope.unsigned_q", "255,-255");
+    aip_cmdline_override::set_val("scope.unsigned_q", "255,0");
     `aip_int_queue("scope", signed_byte_t, signed_q, '0, -1)
     `aip_int_queue("scope", unsigned_byte_t, unsigned_q, '0, -1)
     check(signed_q.size() == 2 && signed_q[0] === signed_byte_t'(8'hff) &&
           signed_q[1] === signed_byte_t'(8'h01),
           "signed 8-bit accepted boundary patterns");
     check(unsigned_q.size() == 2 && unsigned_q[0] === 8'hff &&
-          unsigned_q[1] === 8'h01,
-          "unsigned 8-bit accepted boundary patterns");
+          unsigned_q[1] === 8'h00,
+          "unsigned 8-bit accepted boundary values (negatives are rejected)");
 
     $display("CMDLINE_STRUCT_SCHEMA_INTEGRATION_API_PASS");
   endtask

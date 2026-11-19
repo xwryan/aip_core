@@ -108,6 +108,8 @@ help:
 	@echo "  test_cmdline_print_control test_cmdline_wide test_cmdline_array_random"
 	@echo "  test_cmdline_zero_weight (zero weights and source diagnostics)"
 	@echo "  test_cmdline_diagnostics (fatal parse errors and user source locations)"
+	@echo "  test_cmdline_opt (optional _opt reads, path aliases, array root selection, enum rand/values, unused keys)"
+	@echo "  test_cmdline_unsigned (unsigned targets reject negative and out-of-range values on every parse path)"
 	@echo "  test_cmdline_split (standalone/package compatibility and internal include rejection)"
 	@echo "  bench_cmdline (53-only parser performance baseline; no production optimizations)"
 	@echo "  test_cmdline_struct_schema (focused aggregate), including integration and negative matrices"
@@ -394,6 +396,77 @@ test_cmdline_query:
 	cd $(TEST_SV_DIR) && { ./simv_cmdline_query +tcq_neg +q.neg=-3 > cmdline_query_neg.log 2>&1 || true; }
 	cd $(TEST_SV_DIR) && grep -q 'requires an unsigned value' cmdline_query_neg.log && ! grep -q TCQ_FAIL cmdline_query_neg.log && echo 'TCQ_OK:   negative unsigned input is a hard fatal'
 
+# 可选参数 _opt、aip_cmdline_alias 别名链、选根容器、枚举 rand/数值候选、aip_cmdline_usage 未用键；负例逐项 hard fatal。
+.PHONY: test_cmdline_opt test_cmdline_unsigned
+test_cmdline_opt:
+	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_cmdline_opt -o simv_cmdline_opt -Mdir=csrc_cmdline_opt test_cmdline_opt.sv
+	cd $(TEST_SV_DIR) && ./simv_cmdline_opt -no_save -exitstatus +o.outer_x.v=21 +o.x.v=22 +v=23 +o.x.pa=22 +pa=23 +pl=23 \
+	    +o.outer_x.pe= +o.x.pe=5 +o.outer_x.arr2=1,2 +u.y.typo=1 > cmdline_opt.log 2>&1 || { cat cmdline_opt.log; exit 1; }
+	cd $(TEST_SV_DIR) && grep -E '^TCO_|TEST_CMDLINE_OPT' cmdline_opt.log && grep -q TEST_CMDLINE_OPT_PASS cmdline_opt.log && ! grep -q TCO_FAIL cmdline_opt.log
+	cd $(TEST_SV_DIR) && set -e; \
+	    for c in enum_number enum_range enum_rand_list opt_syntax; do \
+	        case $$c in \
+	            enum_number)    expect="candidate[1] '7' not found in enum"; where="parameter='+bad.e' value='A,7'";; \
+	            enum_range)     expect="candidate[0] '[1:5]' not found in enum"; where="parameter='+bad.e'";; \
+	            enum_rand_list) expect="candidate[0] 'rand' not found in enum"; where="parameter='+bad.e'";; \
+	            opt_syntax)     expect="Range min > max"; where="parameter='+bad.x.v' value='[5:1]'";; \
+	        esac; \
+	        rc=0; ./simv_cmdline_opt -no_save -exitstatus +tco_neg=$$c > cmdline_opt_neg_$$c.log 2>&1 || rc=$$?; \
+	        test $$rc -ne 0 || { cat cmdline_opt_neg_$$c.log; echo "TCO_FAIL: negative $$c was accepted"; exit 1; }; \
+	        grep -F '[FATAL]' cmdline_opt_neg_$$c.log | grep -F "$$expect" | grep -Fq "$$where" \
+	            || { cat cmdline_opt_neg_$$c.log; echo "TCO_FAIL: negative $$c diagnostics"; exit 1; }; \
+	        ! grep -q TCO_FAIL cmdline_opt_neg_$$c.log; \
+	        echo "TCO_OK:   negative $$c is a hard fatal: $$expect"; \
+	    done
+
+# 无符号目标拒绝负数与越界（plusarg、set_param、列表/索引/.each、严格 queue、schema、旧版 struct、flags、_opt）。
+test_cmdline_unsigned:
+	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_cmdline_unsigned -o simv_cmdline_unsigned -Mdir=csrc_cmdline_unsigned test_cmdline_unsigned.sv
+	cd $(TEST_SV_DIR) && ./simv_cmdline_unsigned -no_save -exitstatus +tu.u8=255 "+tu.u8h=8'hFF" +tu.u8x=0xff +tu.u32=4294967295 \
+	    +tu.u64=18446744073709551615 "+tu.u128=128'hffffffffffffffffffffffffffffffff" +tu.i32=-2147483648 +tu.s8=-128 \
+	    "+tu.r8=[250:255]" "+tu.w8={0:=1,255:=1}" +tu.arr8=0,255 +tu.cfg.u8f=255 +tu.cfg.s32f=-7 +tu.flags=F1,F7 \
+	    > cmdline_unsigned.log 2>&1 || { cat cmdline_unsigned.log; exit 1; }
+	cd $(TEST_SV_DIR) && grep -E '^TCU_|TEST_CMDLINE_UNSIGNED' cmdline_unsigned.log && grep -q TEST_CMDLINE_UNSIGNED_PASS cmdline_unsigned.log && ! grep -q TCU_FAIL cmdline_unsigned.log
+	cd $(TEST_SV_DIR) && set -e; \
+	    for c in plusarg zero sized wrap64 over over_sized over_hex over64 range weight_value weight_negative inc \
+	             override override_expr list each index queue schema legacy flags opt; do \
+	        neg8="negative value"; rng="for unsigned 8-bit bit[7:0] (allowed 0..255)"; where="parameter='+tu.bad8'"; \
+	        case $$c in \
+	            plusarg)         set -- "+tu.bad8=-1";       expect="$$neg8 -1 $$rng"; where="$$where value='-1'";; \
+	            zero)            set -- "+tu.bad8=-0";       expect="$$neg8 -0 $$rng";; \
+	            sized)           set -- "+tu.bad8=-8'h1";    expect="$$neg8 -8'h1 $$rng";; \
+	            wrap64)          set -- "+tu.bad64=-18446744073709551615"; where="parameter='+tu.bad64'"; \
+	                             expect="$$neg8 -18446744073709551615 for unsigned 64-bit longint unsigned (allowed 0..18446744073709551615)";; \
+	            over)            set -- "+tu.bad8=256";      expect="value 256 exceeds 8-bit bit[7:0] (allowed 0..255)";; \
+	            over_sized)      set -- "+tu.bad8=9'h100";   expect="value 9'h100 exceeds 8-bit bit[7:0] (allowed 0..255)";; \
+	            over_hex)        set -- "+tu.bad8=0x100";    expect="value 0x100 exceeds 8-bit bit[7:0] (allowed 0..255)";; \
+	            over64)          set -- "+tu.bad64=0x1_0000_0000_0000_0000"; where="parameter='+tu.bad64'"; \
+	                             expect="value 0x1_0000_0000_0000_0000 exceeds 64-bit longint unsigned (allowed 0..18446744073709551615)";; \
+	            range)           set -- "+tu.bad8=[-1:5]";   expect="$$neg8 -1 $$rng";; \
+	            weight_value)    set -- "+tu.bad8={-1:=1,2:=1}"; expect="$$neg8 -1 $$rng";; \
+	            weight_negative) set -- "+tu.bad8={1:=-1,2:=1}"; expect="Weight must be >= 0";; \
+	            inc)             set -- "+tu.bad8=inc:-4:4:2"; expect="$$neg8 -4 $$rng";; \
+	            override)        set -- ;                     expect="$$neg8 -1 $$rng"; where="$$where value='-1'";; \
+	            override_expr)   set -- ;                     expect="$$neg8 -3 $$rng";; \
+	            list)            set -- "+tu.arr8=1,-1";      expect="$$neg8 -1 $$rng"; where="parameter='+tu.arr8[1]'";; \
+	            each)            set -- "+tu.arr8.size=2" "+tu.arr8.each=-1"; expect="$$neg8 -1 $$rng"; where="parameter='+tu.arr8.each'";; \
+	            index)           set -- "+tu.arr8[0]=-1";     expect="$$neg8 -1 $$rng"; where="parameter='+tu.arr8[0]'";; \
+	            queue)           set -- "+tu.q8=1,-1";        where="[AIP_STRUCT]"; \
+	                             expect="tu.q8[1] integral token '-1' is negative for unsigned 8-bit target (allowed 0..255)";; \
+	            schema)          set -- "+tu.ncfg.u8f=-1";    where="[AIP_STRUCT]"; \
+	                             expect="tu.ncfg.u8f integral token '-1' is negative for unsigned 8-bit target (allowed 0..255)";; \
+	            legacy)          set -- "+tu.leg.f8=-1";      expect="$$neg8 -1 $$rng"; where="parameter='+tu.leg.f8'";; \
+	            flags)           set -- "+tu.flags8=-1";      expect="negative mask -1; flags are unsigned (allowed 0..0xff)"; where="parameter='+tu.flags8'";; \
+	            opt)             set -- "+tu.opt8=-5";        expect="$$neg8 -5 $$rng"; where="parameter='+tu.opt8' value='-5'";; \
+	        esac; \
+	        rc=0; ./simv_cmdline_unsigned -no_save -exitstatus +tcu_neg=$$c "$$@" > cmdline_unsigned_neg_$$c.log 2>&1 || rc=$$?; \
+	        test $$rc -ne 0 || { cat cmdline_unsigned_neg_$$c.log; echo "TCU_FAIL: negative $$c was accepted"; exit 1; }; \
+	        grep -F '[FATAL]' cmdline_unsigned_neg_$$c.log | grep -F -- "$$expect" | grep -Fq -- "$$where" \
+	            || { cat cmdline_unsigned_neg_$$c.log; echo "TCU_FAIL: negative $$c diagnostics"; exit 1; }; \
+	        ! grep -q TCU_FAIL cmdline_unsigned_neg_$$c.log; \
+	        echo "TCU_OK:   negative $$c is a hard fatal: $$expect"; \
+	    done
+
 # aip_cmd::parse_uint_arg 严格无符号解析；同时核对 parse_int64_arg 的旧行为不变。
 test_parse_uint_arg:
 	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_parse_uint_arg -o simv_parse_uint_arg -Mdir=csrc_parse_uint_arg test_parse_uint_arg.sv
@@ -420,11 +493,11 @@ test_mon_hub:
 test_aip_flags:
 	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_aip_flags -o simv_aip_flags -Mdir=csrc_aip_flags test_aip_flags.sv
 	cd $(TEST_SV_DIR) && ./simv_aip_flags -exitstatus +taf.names=b,A,b "+taf.spaced= A , HIGH " +taf.num=0x8000_0000_0000_0011 "+taf.sized=8'b1010_0101" \
-	    +taf.neg=-1 +taf.dname=d0 +taf.narrow=B,D0 +taf.h0.pf1.vf2.i0.mask=D0,HIGH +mask=B > aip_flags.log 2>&1 || { cat aip_flags.log; exit 1; }
+	    +taf.neg=0xffff_ffff_ffff_ffff +taf.dname=d0 +taf.narrow=B,D0 +taf.h0.pf1.vf2.i0.mask=D0,HIGH +mask=B > aip_flags.log 2>&1 || { cat aip_flags.log; exit 1; }
 	cd $(TEST_SV_DIR) && grep -E '^TAF_|TEST_AIP_FLAGS|^UVM_(ERROR|FATAL) *:' aip_flags.log && grep -q TEST_AIP_FLAGS_PASS aip_flags.log && ! grep -q TAF_FAIL aip_flags.log
 	cd $(TEST_SV_DIR) && grep -Fq "param 'names' (scope='taf') = 0x3 (A|B)" aip_flags.log && echo "TAF_OK:   registration log shows hex and names"
 	cd $(TEST_SV_DIR) && set -e; \
-	    for c in unknown hier empty mixed bit_range value_range; do \
+	    for c in unknown hier empty mixed bit_range value_range negative; do \
 	        arg=+taf_neg=$$c; where="parameter='+taf.bad'"; \
 	        case $$c in \
 	            unknown)     arg="$$arg +taf.bad=A,BOGUS"; expect="unknown flag 'BOGUS'"; where="parameter='+taf.bad' value='A,BOGUS'";; \
@@ -433,6 +506,7 @@ test_aip_flags:
 	            mixed)       expect="unknown flag '0x2'";; \
 	            bit_range)   expect="flag 'HIGH' is bit 63, outside the 8-bit target";; \
 	            value_range) expect="value 0x100 exceeds the 8-bit target";; \
+	            negative)    expect="negative mask -1; flags are unsigned (allowed 0..0xff)";; \
 	        esac; \
 	        rc=0; ./simv_aip_flags -exitstatus $$arg > aip_flags_neg_$$c.log 2>&1 || rc=$$?; \
 	        test $$rc -ne 0 || { cat aip_flags_neg_$$c.log; echo "TAF_FAIL: negative $$c was accepted"; exit 1; }; \
@@ -1410,7 +1484,7 @@ test_cmdline_wide:
 	    "+u128=340282366920938463463374607431768211455" \
 	    "+u256=256'hffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" \
 	    "+u256_pat=0x0123456700000000000000000000000000000000000000000000000089abcdef" \
-	    "+u8=-1" "+i32=-0x10" "+iu32=0xFFFF_FFFF" \
+	    "+u8=8'hff" "+i32=-0x10" "+iu32=0xFFFF_FFFF" \
 	    "+r128=[0x1_0000_0000_0000_0000:0x1_0000_0000_0000_00FF]" "+rl=[0x1_0000_0000:0x1_0000_00FF]" \
 	    "+rr=rand" \
 	    > cmdline_wide.log 2>&1 || { cat cmdline_wide.log; exit 1; }

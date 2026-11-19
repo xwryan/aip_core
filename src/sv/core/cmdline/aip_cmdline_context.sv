@@ -74,6 +74,106 @@ class aip_cmdline_override;
     endfunction
 endclass
 
+// 路径别名：push(path, alias_path) 后，查询 <path>[.子路径].<name> 时在完整路径与叶名之间多查 <alias_path>[.子路径].<name>，
+// 来源顺序为 override(完整、别名、叶名) 再 plusarg(完整、别名、叶名)。作用于标量、旧版数组与 aip_cmdline_query 入口；
+// schema 与严格 queue 入口不查别名。可嵌套，最近一次 push 优先；须在同一段零时间代码内 pop，不跨 task 等待保留。
+class aip_cmdline_alias;
+    local static string paths[$];
+    local static string aliases[$];
+
+    // alias_path 为空表示本层不提供别名（便于调用方无条件成对 push/pop）。
+    static function void push(string path, string alias_path);
+        paths.push_back(path);
+        aliases.push_back(alias_path);
+    endfunction
+
+    static function void pop();
+        if (paths.size() == 0) return;
+        void'(paths.pop_back());
+        void'(aliases.pop_back());
+    endfunction
+
+    // path 等于或位于某个已 push 的路径之下时返回映射后的别名路径；无别名或映射结果与 path 相同时返回空串。
+    static function string resolve(string path);
+        for (int i = paths.size() - 1; i >= 0; i--) begin
+            int		n;
+            string	mapped;
+            n = paths[i].len();
+            if (path == paths[i])
+                mapped = aliases[i];
+            else if (n != 0 && path.len() > n && path.substr(0, n-1) == paths[i] && path[n] == ".")
+                mapped = (aliases[i] == "") ? "" : {aliases[i], path.substr(n, path.len()-1)};
+            else
+                continue;
+            return (mapped == path) ? "" : mapped;
+        end
+        return "";
+    endfunction
+endclass
+
+// 键使用记录：record_begin() 之后，标量、旧版数组与 aip_cmdline_query 入口把查询过的候选键（完整、别名、叶名）记为
+// 已使用，容器按根记录（根、根.控制键、根[i] 均算）。record_end(prefix, unused) 列出 prefix 子树下由 override 或
+// plusarg 给出、但记录期间未被查询的键（按字典序），并结束本层记录。可嵌套，最外层 begin 时清空；schema 与严格
+// queue 入口不参与记录。只读键名，不求值、不消耗随机数。
+class aip_cmdline_usage;
+    local static int	depth;
+    local static bit	keys[string];
+    local static bit	roots[string];
+
+    static function void record_begin();
+        if (depth == 0) begin
+            keys.delete();
+            roots.delete();
+        end
+        depth++;
+    endfunction
+
+    static function bit recording();
+        return depth != 0;
+    endfunction
+
+    static function void note(string key);
+        if (depth != 0) keys[key] = 1;
+    endfunction
+
+    static function void note_root(string root);
+        if (depth != 0) roots[root] = 1;
+    endfunction
+
+    static function void record_end(string prefix, ref string unused[$]);
+        string					given[string];
+        string					override_keys[$];
+        string					args[$];
+        uvm_cmdline_processor	clp;
+        unused.delete();
+        if (depth == 0) return;
+        aip_cmdline_override::get_keys(override_keys);
+        foreach (override_keys[i]) given[override_keys[i]] = "";
+        clp = aip_cmdline_source::get();
+        clp.get_plusargs(args);
+        foreach (args[i]) begin
+            int	eq;
+            eq = aip_str::str_find(args[i], "=");
+            if (eq > 1) given[args[i].substr(1, eq - 1)] = "";
+        end
+        foreach (given[key]) begin
+            if (key.len() <= prefix.len() || key.substr(0, prefix.len()-1) != prefix ||
+                key[prefix.len()] != ".")
+                continue;
+            if (!used(key)) unused.push_back(key);
+        end
+        depth--;
+    endfunction
+
+    // 精确命中，或某个前缀（截到 "." / "[" 之前）是已记录的容器根。
+    local static function bit used(string key);
+        if (keys.exists(key) || roots.exists(key)) return 1;
+        for (int i = 1; i < key.len(); i++)
+            if ((key[i] == "." || key[i] == "[") && roots.exists(key.substr(0, i-1))) return 1;
+        return 0;
+    endfunction
+endclass
+
 // 解析器公共诊断层，跨 T 特化共享：底层（含 byte 数组的 int .size）报错时仍能定位用户宏调用位置及正在消费的配置。
 // 入口均为不推进时间的 function，嵌套用栈保存，正常返回必须 pop。
 class aip_cmdline_diagnostic;
