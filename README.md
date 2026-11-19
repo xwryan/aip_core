@@ -680,8 +680,9 @@ void'(aip_cmdline#(bit [7:0])::get_optional("code", path, icmp_code));  // 键�
   空值同时屏蔽其后来源（`aip_int` 的空 override 仍取类型初值，规则不变）。非空值按对应基础宏的语法求值，非法即 hard fatal。
 - `given`（最后一个可选参数）只在写入时置 1、未给出时不改，便于多个参数累计到同一标志；不传则忽略。
 - 只在写入时打印注册日志；`global_required` 不作用于 `_opt`。
-- 容器先选根再解析：完整、别名、叶名三个根中，第一个有键（根本身、`根.控制键` 或 `根[i]`，override 先于 plusarg）
-  的根胜出，按 `aip_int_list` 规则整体替换，未覆盖元素取 `default_val`；不同根下的键不合并，都没有键时保持原内容。
+- 容器先选根再解析：按 override(完整、别名、叶名) 再 plusarg(完整、别名、叶名) 的顺序，第一个有键（根本身、
+  `根.控制键` 或 `根[i]`）的根胜出，按 `aip_int_list` 规则整体替换，未覆盖元素取 `default_val`；不同根下的键不合并，
+  都没有键时保持原内容。
 
 路径别名让同一组件既能用完整路径也能用短路径配置：
 
@@ -798,8 +799,9 @@ function/task，或使用 `randomize() with` 完成。
 
 ### 4.1 随机化语法
 
-随机源是 `$urandom`，跟随 `+ntb_random_seed`，同种子同命令行结果可复现。每个宏在注册时
-抽一次值，注册日志会打印抽到的值。
+随机源是 `$urandom`，跟随 `+ntb_random_seed`，同种子同命令行结果可复现。宏每执行一次就重新读取来源、重新抽样，
+不缓存上次结果：放在循环里、每次 `new()` 或每包调用的宏，每次都可能得到不同的值；只想抽一次时，在只执行一次的
+位置读取并保存结果。注册日志打印本次抽到的值，次数受 §4.2 限制，超过上限后照常抽样，只是不再打印。
 
 **标量**（`aip_int`、`aip_struct_int` 字段、数组的每个元素位置都可用）：
 
@@ -940,12 +942,16 @@ plusarg 原有抽样路径保持不变；两侧能力一致不意味着穿插固
 
 ### 4.2 注册日志
 
-每个参数注册时打印一行日志，默认每个完整 `path.name` 键最多 10 次，不同键分别计数：
+参数宏每执行一次打印一行日志（`_opt` 宏只在写入时打印），默认每个完整 `path.name` 键最多 10 次，不同键分别计数：
 
 ```text
 +aip_cmdline.print_enable=0      # 全局关闭（解析和赋值照常）
 +aip_cmdline.max_prints=3        # 每键最多 3 次；-1 不限，0 不打印
 ```
+
+这两个键只在第一次要打印注册日志时读取一次（plusarg 或当时已有的 `set_param` override），之后不再读取：
+后来的 `set_param aip_cmdline.*` 和 `aip_restore` 后新进程给的同名 plusarg 都不生效；第一次打印前已调用
+`configure` 时则完全不读取。运行中修改只能用下面两个入口。
 
 运行时：SV `aip_cmdline_print_control::configure(1, 5);` 或 Tcl
 `set_cmdline_print enable=1 max_prints=5`。每次运行时配置都会清空已累计的计数。
@@ -1371,6 +1377,15 @@ m_scb.push_actual(act_tr, act_tr.get_scb_stream_id(), act_tr.get_scb_kind());
 
 每个实例按全名登记，Tcl 可查询：`scb_list`、`scb_status name=<全名>`、`scb_report name=<全名> limit=N`、
 `scb_set_limit name=<全名> limit=N`（-1 不限，0 只出汇总）。
+
+**报告行数上限**：report_phase（`aip_scb_cfg.m_report_en=1` 时）打印汇总行和问题 stream 表。表中只列有问题的
+stream（mismatch、drop、unexpected、pending、overflow 或诊断 warning 非零），FAIL 在 WARN 前、问题数多的在前，
+最多列 `aip_scb_cfg.m_report_limit` 行，默认 10；`-1` 全部列出，`0` 只打印汇总行，
+`Problem streams: total=… shown=… omitted=…` 给出省略数。仿真启动时可用 `+SCB_REPORT_LIMIT=N` 覆盖所有
+`aip_scb` 实例的这个值：各实例在 build_phase 用 `$value$plusargs` 直接读取（覆盖 config_db 给的 cfg），
+不经 aip_cmdline，所以没有路径前缀、不受 `set_param` 影响、不支持随机语法、不打印注册日志；只接受 ≥ -1 的
+十进制整数，空值或非法值报 `SCB_CFG` warning 并保留原配置。运行中用 `scb_set_limit` 改单个实例，或用
+`scb_report limit=N` 只改这一次报告。它不限制运行时逐条错误信息，那由 `m_err_limit`（默认 10，没有 plusarg）控制。
 
 **旧平台迁移**：aip_core 自带上述四条 scb 命令，不提供兼容开关。旧版生成器产出的平台若自己注册
 `scb_list/scb_status/scb_report/scb_set_limit`（如 `common_scb_aip_adapter.sv` 这类 adapter），须删除该 adapter；

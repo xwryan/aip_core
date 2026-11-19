@@ -485,7 +485,8 @@ aip_cmdline_usage::record_end("eth0", unused);
 #### 随机化语法（标量与数组）
 
 所有随机相关语法集中在此。随机源是 `$urandom`，跟随 `+ntb_random_seed`：同一种子、同一命令行
-得到同一结果。每个宏在注册时抽一次值，注册日志会打印抽到的值。
+得到同一结果。宏每执行一次就重新读取来源、重新抽样，不缓存上次结果；循环里或每次 `new()` 执行的宏每次都可能
+得到不同的值。注册日志打印本次抽到的值，次数受下文"注册日志控制"限制，超过上限后照常抽样，只是不再打印。
 
 **标量（`aip_int`；`aip_struct_int` 字段同）**
 
@@ -595,7 +596,9 @@ set_cmdline_print enable=1 max_prints=5
 `max_prints=-1` 表示不限制次数，`max_prints=0` 表示不打印；`print_enable=0` 全局关闭
 注册日志，但参数解析与赋值仍继续。小于 `-1` 的 `max_prints` 会归一化为 `-1` 并打印
 warning。每次运行时调用 `configure` 或 `set_cmdline_print` 都会清空已经累计的 per-key
-计数；plusarg 只用于 fresh-process 启动配置，不承担运行时重配置。
+计数。`print_enable`/`max_prints` 只在第一次要打印注册日志时读取一次（plusarg 或当时已有的 `set_param`
+override），之后不再读取：后来的 `set_param aip_cmdline.*` 和 `aip_restore` 后新进程给的同名 plusarg 都不生效；
+第一次打印前已调用 `configure` 时则完全不读取。运行时重配置只用 `configure` / `set_cmdline_print`。
 
 ### 6. aip_cmd.sv — 命令分发框架
 

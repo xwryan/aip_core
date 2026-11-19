@@ -11,7 +11,7 @@
             `aip_info(("[aip_cmdline] param '%s' (scope='%s') = %0d (0x%0h)", `"name`", path, name, name)); \
     end
 
-// 无符号参数：先拒绝负数字面量再按 aip_int 读取（aip_int 把 -1 读成全 1，适合位掩码，不适合计数/地址/ID）。
+// 无符号参数：原文含 '-' 即报错，再按 aip_int 读取；aip_int 对无符号目标本身已拒绝负数与越界值。
 `define aip_uint(path,rtype,name,default_val=0) \
     begin \
         string _aip_raw; \
