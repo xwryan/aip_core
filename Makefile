@@ -1344,6 +1344,10 @@ test_cmdline_print_control:
 	cd $(TEST_SV_DIR) && cat cmdline_print_startup_normalized.log && grep -Fq "CMDLINE_PRINT_CONTROL_PASS mode=startup-normalized" cmdline_print_startup_normalized.log
 	cd $(TEST_SV_DIR) && ./simv_cmdline_print_control +AIP_CMDLINE_PRINT_MODE=startup-disabled +aip_cmdline.print_enable=0 +startup.repeated=77 > cmdline_print_startup_disabled.log 2>&1 || { cat cmdline_print_startup_disabled.log; exit 1; }
 	cd $(TEST_SV_DIR) && cat cmdline_print_startup_disabled.log && grep -Fq "CMDLINE_PRINT_CONTROL_PASS mode=startup-disabled" cmdline_print_startup_disabled.log
+	cd $(TEST_SV_DIR) && ./simv_cmdline_print_control +AIP_CMDLINE_PRINT_MODE=startup-full-only +print_enable=0 +max_prints=1 +alt.print_enable=0 +alt.max_prints=0 > cmdline_print_startup_full_only.log 2>&1 || { cat cmdline_print_startup_full_only.log; exit 1; }
+	cd $(TEST_SV_DIR) && cat cmdline_print_startup_full_only.log && grep -Fq "CMDLINE_PRINT_CONTROL_PASS mode=startup-full-only" cmdline_print_startup_full_only.log
+	cd $(TEST_SV_DIR) && ./simv_cmdline_print_control +AIP_CMDLINE_PRINT_MODE=refresh +aip_cmdline.max_prints=4 +max_prints=0 > cmdline_print_refresh.log 2>&1 || { cat cmdline_print_refresh.log; exit 1; }
+	cd $(TEST_SV_DIR) && cat cmdline_print_refresh.log && grep -Fq "CMDLINE_PRINT_CONTROL_PASS mode=refresh" cmdline_print_refresh.log
 
 # Runtime .so command-plugin test — requires VCS + gcc
 test_soload:

@@ -660,7 +660,8 @@ utils_loud             ;# 恢复 UCLI 命令行回显
 ```
 
 显式 `puts` 以及 warning、error、fatal 诊断不会被普通静音开关隐藏。参数注册日志还可用
-`set_cmdline_print enable=0|1 max_prints=N` 控制；解析错误不受该开关屏蔽。
+`set_cmdline_print enable=0|1 max_prints=N` 控制（有效到下一次 `aip_restore` 刷新参数来源；启动配置只认完整键
+`+aip_cmdline.print_enable` / `+aip_cmdline.max_prints`）；解析错误不受该开关屏蔽。
 
 ## 第 12 章：动态库与插件
 

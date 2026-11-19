@@ -34,8 +34,9 @@ class ckpr_state;
     endfunction
 
     // profile A/B/C/N = 基准/变更/链式恢复/缺参；saved = 保存对象应来自的 profile；
-    // source=private 检查恢复后的独占句柄，held 检查快照内已有 override 的优先级；首次 getter 不得消耗 RNG。
-    static task sample(string profile, string saved, string source_kind, int expected_held);
+    // source=private 检查恢复后的独占句柄，held 检查快照内已有 override 的优先级；首次 getter 不得消耗 RNG；
+    // prints=<print_enable>:<max_prints> 为注册日志的当前设置（刷新后应按新进程完整键重读）。
+    static task sample(string profile, string saved, string source_kind, int expected_held, string expected_prints);
         int count, dupe, newonly, oldonly, choice, held;
         string label, empty;
         int items[], q[$];
@@ -46,6 +47,9 @@ class ckpr_state;
         process owner;
         string rng;
         string values[$];
+        bit print_enable;
+        int max_prints;
+        string prints;
 
         case (profile)
             "A": begin
@@ -110,19 +114,24 @@ class ckpr_state;
             require(tree.children.size() == 1 && tree.children[0].value == expected_count &&
                     tree.children[0].text == expected_text, "nested schema indexed/space/equal value");
         end
-        $display("CKPR_SAMPLE profile=%s saved=%s source=%s count=%0d held=%0d", profile, saved, source_kind, count, held);
+        aip_cmdline_print_control::get_config(print_enable, max_prints);
+        prints = $sformatf("%0d:%0d", print_enable, max_prints);
+        require(prints == expected_prints, {"print control ", prints, " expected ", expected_prints});
+        $display("CKPR_SAMPLE profile=%s saved=%s source=%s count=%0d held=%0d prints=%s",
+                 profile, saved, source_kind, count, held, prints);
     endtask
 endclass
 
-// 手工注册只为传递四个期望字段，业务检查仍走公开 AIP 宏。
+// 手工注册只为传递五个期望字段，业务检查仍走公开 AIP 宏。
 class ckpr_command extends aip_cmd;
     task cmd_exec();
-        string profile, saved, source_kind, held;
+        string profile, saved, source_kind, held, prints;
         profile = aip_cmd::get_arg(args_in, "profile");
         saved = aip_cmd::get_arg(args_in, "saved");
         source_kind = aip_cmd::get_arg(args_in, "source");
         held = aip_cmd::get_arg(args_in, "held");
-        ckpr_state::sample(profile, saved, source_kind, held.atoi());
+        prints = aip_cmd::get_arg(args_in, "prints");
+        ckpr_state::sample(profile, saved, source_kind, held.atoi(), prints);
         result_out = "CKPR_OK";
         status = 0;
     endtask

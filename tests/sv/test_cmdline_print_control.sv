@@ -109,6 +109,91 @@ module test_cmdline_print_control;
         finish_mode("startup-disabled");
     endtask
 
+    task automatic check_config(string label, bit expected_enable, int expected_max);
+        bit enable;
+        int limit;
+        aip_cmdline_print_control::get_config(enable, limit);
+        check_int({label, ": print_enable"}, enable, expected_enable);
+        check_int({label, ": max_prints"}, limit, expected_max);
+    endtask
+
+    // 命令行同时给叶名 +print_enable=0 +max_prints=1 和别名 +alt.*；叶名 override 与别名都不得改变默认 1/10。
+    task automatic run_startup_full_only();
+        int before_count;
+        aip_cmdline_override::set_val("max_prints", "0");
+        aip_cmdline_alias::push("aip_cmdline", "alt");
+        before_count = aip_log::get_count(aip_log::INFO);
+        repeat (12) begin
+            `aip_int("startup.full_only", int, repeated, 0);
+        end
+        aip_cmdline_alias::pop();
+        check_info_delta("leaf and alias forms are ignored", before_count, 10);
+        check_config("leaf and alias forms are ignored", 1, 10);
+        finish_mode("startup-full-only");
+    endtask
+
+    // 模拟恢复后的来源刷新（置 request 为 ack 的反值）；命令行给 +aip_cmdline.max_prints=4 与叶名 +max_prints=0。
+    task automatic refresh_source();
+        __aip_cmdline_refresh_request = ~__aip_cmdline_refresh_ack;
+    endtask
+
+    task automatic run_refresh();
+        int before_count;
+
+        before_count = aip_log::get_count(aip_log::INFO);
+        repeat (6) begin
+            `aip_int("refresh.start", int, repeated, 0);
+        end
+        check_info_delta("full plusarg max_prints=4", before_count, 4);
+        check_config("startup", 1, 4);
+
+        // configure 有效到下一次刷新；刷新后按命令行重读并清零计数。
+        aip_cmdline_print_control::configure(1, 2);
+        before_count = aip_log::get_count(aip_log::INFO);
+        repeat (3) begin
+            `aip_int("refresh.a", int, repeated, 0);
+        end
+        check_info_delta("configure(1,2) before refresh", before_count, 2);
+        refresh_source();
+        check_config("refresh discards configure", 1, 4);
+        before_count = aip_log::get_count(aip_log::INFO);
+        repeat (6) begin
+            `aip_int("refresh.a", int, repeated, 0);
+        end
+        check_info_delta("refresh clears counters", before_count, 4);
+
+        aip_cmdline_print_control::configure(1, 1);
+        before_count = aip_log::get_count(aip_log::INFO);
+        repeat (3) begin
+            `aip_int("refresh.b", int, repeated, 0);
+        end
+        check_info_delta("configure after refresh", before_count, 1);
+
+        // 完整键 override 到下一次刷新才生效，并优先于 plusarg；叶名 override 始终无效。
+        aip_cmdline_override::set_val("aip_cmdline.max_prints", "3");
+        aip_cmdline_override::set_val("max_prints", "0");
+        aip_cmdline_override::set_val("print_enable", "0");
+        check_config("override waits for refresh", 1, 1);
+        refresh_source();
+        check_config("full override after refresh", 1, 3);
+        before_count = aip_log::get_count(aip_log::INFO);
+        repeat (5) begin
+            `aip_int("refresh.c", int, repeated, 0);
+        end
+        check_info_delta("full override limit", before_count, 3);
+
+        // 空值按未给出处理：空 max_prints 取默认 10，且屏蔽 plusarg 的 4。
+        aip_cmdline_override::set_val("aip_cmdline.max_prints", "");
+        aip_cmdline_override::set_val("aip_cmdline.print_enable", "0");
+        refresh_source();
+        check_config("empty override means default", 0, 10);
+        before_count = aip_log::get_count(aip_log::INFO);
+        `aip_int("refresh.d", int, repeated, 0);
+        check_info_delta("print_enable=0 after refresh", before_count, 0);
+
+        finish_mode("refresh");
+    endtask
+
     task automatic check_all_disabled_values();
         check_int("disabled int assignment", int_value, 42);
         check_string("disabled string assignment", string_value, "alpha");
@@ -248,6 +333,8 @@ module test_cmdline_print_control;
             "startup-limit":    run_startup_limit();
             "startup-normalized": run_startup_normalized();
             "startup-disabled": run_startup_disabled();
+            "startup-full-only": run_startup_full_only();
+            "refresh":          run_refresh();
             default: $fatal(1, "unknown print-control test mode '%s'", test_mode);
         endcase
     end

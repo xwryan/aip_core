@@ -16,6 +16,8 @@ reg __aip_cmdline_refresh_ack = 0;
 // 恢复只让 AIP 参数来源失效，不改 UVM 私有 singleton、override、用户持有的句柄及已赋值配置。
 class aip_cmdline_source;
     protected static uvm_cmdline_processor current;
+    // 刷新次数，随快照保存且只增不减；缓存了命令行读取结果的组件记下读取时的值，不同即按新进程重读。
+    protected static int unsigned m_generation;
 
     // 失效后先完整构造新处理器（UVM 构造器经 DPI 重枚举当前进程 CLI）再发布并 ACK，保证全部读取看到同一份参数；
     // 构造前后保存/恢复调用进程 RNG，避免刷新改变业务随机流。空列表 fatal，不静默回退到快照中的旧 CLI。
@@ -34,10 +36,17 @@ class aip_cmdline_source;
             if (args.size() == 0)
                 $fatal(1, "AIP_CMDLINE_REFRESH: current process argument enumeration is empty");
             current = replacement;
+            m_generation++;
             __aip_cmdline_refresh_ack = __aip_cmdline_refresh_request;
         end
         if (current != null) return current;
         return uvm_cmdline_processor::get_inst();
+    endfunction
+
+    // 先处理待刷新请求再返回刷新次数。
+    static function int unsigned generation();
+        void'(get());
+        return m_generation;
     endfunction
 endclass
 

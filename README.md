@@ -949,12 +949,16 @@ plusarg 原有抽样路径保持不变；两侧能力一致不意味着穿插固
 +aip_cmdline.max_prints=3        # 每键最多 3 次；-1 不限，0 不打印
 ```
 
-这两个键只在第一次要打印注册日志时读取一次（plusarg 或当时已有的 `set_param` override），之后不再读取：
-后来的 `set_param aip_cmdline.*` 和 `aip_restore` 后新进程给的同名 plusarg 都不生效；第一次打印前已调用
-`configure` 时则完全不读取。运行中修改只能用下面两个入口。
+只认这两个完整键（`set_param` override 优先于 plusarg），不查别名和叶名：给其他组件的 `+print_enable=`、
+`+max_prints=` 不影响注册日志。缺失或空值取默认 1/10。读取时机：
+
+- 第一次要打印注册日志时读取；之后再 `set_param aip_cmdline.*` 要到下一次参数来源刷新才生效。
+- 参数来源刷新（§8.1 `aip_restore` 并重新加载 Tcl）后重新读取：按本次进程的 plusarg（快照里的完整键 override
+  仍优先），未给出的取默认，不沿用快照前的设置；累计计数清零。重读不消耗调用进程的随机数。
 
 运行时：SV `aip_cmdline_print_control::configure(1, 5);` 或 Tcl
-`set_cmdline_print enable=1 max_prints=5`。每次运行时配置都会清空已累计的计数。
+`set_cmdline_print enable=1 max_prints=5`，立即生效并清空已累计的计数，有效到下一次参数来源刷新为止；
+刷新后要沿用就在恢复后再设置一次。`aip_cmdline_print_control::get_config(enable, max)` 返回当前生效的设置。
 
 ### 4.3 实现分层与兼容入口
 
@@ -1719,7 +1723,8 @@ proc 里：`restore` 之后同一条语句序列不会继续，只有 `-do` 脚�
 `+dut.count=20`，恢复后再次执行对应的 `aip_int` 宏就读到 `20`；本次未传的键不会
 沿用生成快照时的命令行值，而是按现有规则回退到 leaf 参数或默认值。同一键重复传入仍取
 最后一个值，完整路径仍优先于 leaf；快照中的 `set_param` override 仍优先于 plusargs，
-需要时先用 `clear_param` 清除它。
+需要时先用 `clear_param` 清除它。注册日志设置（`aip_cmdline.print_enable/max_prints`）同样按本次进程重新读取，
+快照前的 `set_cmdline_print` 不再保留，计数清零，见 §4.2。
 
 恢复不会自动改写快照中的 SV 变量或重新执行构造函数；要更新已有变量，必须再次执行
 对应参数宏。刷新参数来源不重设随机种子、不消耗调用进程的随机数，也不重新随机化已有对象。

@@ -8,8 +8,9 @@ set ::aip_ckpt_dir [file join $::env(CKPR_WORK) snapshots_$::env(CKPR_RUN_ID)]
 set ::aip_simv_path [file join $::env(CKPR_WORK) simv]
 puts "CKPR_LOADER mode=$::env(CKPR_LOADER) embedded=$::aip_tcl_embedded"
 
-proc ckpr_sample {profile saved source_kind held} {
-    aip_send_cmd "ckpr_sample profile=$profile saved=$saved source=$source_kind held=$held"
+# prints=<print_enable>:<max_prints> 为期望的注册日志设置。
+proc ckpr_sample {profile saved source_kind held prints} {
+    aip_send_cmd "ckpr_sample profile=$profile saved=$saved source=$source_kind held=$held prints=$prints"
     if {[aip_check_status] != 0 || [aip_read_result] ne "CKPR_OK"} {
         error "CKPR_FAIL sample command failed"
     }

@@ -1565,13 +1565,16 @@ class aip_cmdline_struct;
 
 endclass
 
-// Registration log throttling shared by all macros.
+// 全部宏共用的注册日志开关与每键次数上限。启动配置只认完整键 aip_cmdline.print_enable / aip_cmdline.max_prints
+// （override > plusarg，不查别名和叶名，其他组件的同名叶名参数不影响这里），首次需要时读取；参数来源刷新
+// （aip_restore）后按新进程重新读取。configure 立即生效，有效到下一次刷新；每次读取或 configure 都清零计数。
 class aip_cmdline_print_control;
     static bit print_enable = 1;
     static int max_prints = 10;
 
     protected static int print_counts[string];
     protected static bit initialized = 0;
+    protected static int unsigned source_generation;
 
     protected static function void apply_config(int enable, int requested_max);
         if (requested_max < -1)
@@ -1579,26 +1582,36 @@ class aip_cmdline_print_control;
                           requested_max));
         print_enable = (enable != 0);
         max_prints = (requested_max < -1) ? -1 : requested_max;
+        print_counts.delete();
         initialized = 1;
+        source_generation = aip_cmdline_source::generation();
     endfunction
 
-    protected static function void lazy_initialize();
-        int enable;
-        int requested_max;
+    // 未读取过或来源已刷新时从完整键读取（path 为空即无别名、叶名候选）；缺失或空值取默认 1/10。
+    // 刷新后的重读保存/恢复调用进程 RNG，与来源刷新一致；首次读取保持原有消耗，不改普通仿真的随机序列。
+    protected static function void sync();
+        int		enable;
+        int		requested_max;
+        bit		reread;
+        process	owner;
+        string	randstate;
 
-        if (initialized) return;
-
-        aip_cmdline#(int)::get_single_value(
-            "print_enable", "aip_cmdline", 1, enable);
-        aip_cmdline#(int)::get_single_value(
-            "max_prints", "aip_cmdline", 10, requested_max);
+        if (initialized && source_generation == aip_cmdline_source::generation()) return;
+        reread = initialized;
+        owner = process::self();
+        if (reread && owner != null) randstate = owner.get_randstate();
+        enable = 1;
+        requested_max = 10;
+        void'(aip_cmdline#(int)::get_optional("aip_cmdline.print_enable", "", enable));
+        void'(aip_cmdline#(int)::get_optional("aip_cmdline.max_prints", "", requested_max));
+        if (reread && owner != null) owner.set_randstate(randstate);
         apply_config(enable, requested_max);
     endfunction
 
     static function bit should_print(string name, string path = "");
         string key;
 
-        lazy_initialize();
+        sync();
         if (!print_enable || max_prints == 0) return 0;
 
         key = (path == "") ? name : {path, ".", name};
@@ -1616,9 +1629,15 @@ class aip_cmdline_print_control;
         return 0;
     endfunction
 
+    // 当前生效的设置（必要时先读取或重读）。
+    static function void get_config(output bit enable, output int requested_max);
+        sync();
+        enable = print_enable;
+        requested_max = max_prints;
+    endfunction
+
     static task configure(int enable, int requested_max_prints);
         apply_config(enable, requested_max_prints);
-        print_counts.delete();
     endtask
 endclass
 `endif // AIP_CMDLINE_INTERNAL_INCLUDE

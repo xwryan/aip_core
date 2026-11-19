@@ -1,13 +1,14 @@
 # 缺省 CLI 进程恢复 A：旧专属键/数组必须消失，已有 override 保持到显式 clear。
+# 注册日志取默认 1:10：A 的 plusarg 与快照里的 set_cmdline_print 都不保留。
 source [file join $::env(AIP_CORE) tests tcl checkpoint_cmdline_common.tcl]
 run 10ns
-ckpr_sample N N singleton -4
+ckpr_sample N N singleton -4 1:10
 aip_restore base
 set ::env(CKPR_LOADER) $::env(CKPR_RUN_ID)
 source [file join $::env(AIP_CORE) tests tcl checkpoint_cmdline_common.tcl]
 ckpr_pending 1
-ckpr_sample N A private 91
+ckpr_sample N A private 91 1:10
 ckpr_command "clear_param path=probe.held"
-ckpr_sample N A private -4
+ckpr_sample N A private -4 1:10
 puts "CKPR_DONE phase=absent"
 quit

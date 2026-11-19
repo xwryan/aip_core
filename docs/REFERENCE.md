@@ -596,9 +596,14 @@ set_cmdline_print enable=1 max_prints=5
 `max_prints=-1` 表示不限制次数，`max_prints=0` 表示不打印；`print_enable=0` 全局关闭
 注册日志，但参数解析与赋值仍继续。小于 `-1` 的 `max_prints` 会归一化为 `-1` 并打印
 warning。每次运行时调用 `configure` 或 `set_cmdline_print` 都会清空已经累计的 per-key
-计数。`print_enable`/`max_prints` 只在第一次要打印注册日志时读取一次（plusarg 或当时已有的 `set_param`
-override），之后不再读取：后来的 `set_param aip_cmdline.*` 和 `aip_restore` 后新进程给的同名 plusarg 都不生效；
-第一次打印前已调用 `configure` 时则完全不读取。运行时重配置只用 `configure` / `set_cmdline_print`。
+计数。
+
+启动配置只认完整键 `aip_cmdline.print_enable` / `aip_cmdline.max_prints`（`set_param` override 优先于 plusarg），
+不查别名和叶名，`+print_enable=`、`+max_prints=` 这类叶名参数不影响注册日志；缺失或空值取默认 1/10。
+第一次要打印注册日志时读取；参数来源刷新（`aip_restore` 后重新加载 Tcl）后按本次进程重新读取，未给出的键取默认，
+快照里的完整键 override 仍优先，累计计数清零，重读不消耗调用进程的随机数。两次读取之间 `set_param aip_cmdline.*`
+不生效，要到下一次刷新。`configure` / `set_cmdline_print` 立即生效，有效到下一次刷新为止，刷新后被重读结果取代；
+`aip_cmdline_print_control::get_config(enable, max)` 返回当前生效的设置。
 
 ### 6. aip_cmd.sv — 命令分发框架
 

@@ -65,21 +65,25 @@ for ckpr_mode in $ckpr_modes; do
         exit 1
     fi
     export CKPR_LOADER="$ckpr_mode" CKPR_RUN_ID="$ckpr_mode"
-    ckpr_run generate 3 \
+    # 注册日志只认完整键 +aip_cmdline.*：A 另带叶名 +print_enable/+max_prints 验证其不生效。
+    ckpr_run generate 4 \
         +probe.count=11 +probe.label=BASE +probe.dupe=1 +probe.dupe=2 +probe.empty=OLD \
         +probe.oldonly=71 +probe.held=4 +choice=3 +probe.choice=5 +choice=9 \
         +probe.items.size=2 +probe.items.each=10 '+probe.items[1]=11' +probe.q=10,11 \
-        +probe.tree.children.size=1 '+probe.tree.children[0].value=11' '+probe.tree.children[0].text=old = text'
-    ckpr_run changed 7 \
+        +probe.tree.children.size=1 '+probe.tree.children[0].value=11' '+probe.tree.children[0].text=old = text' \
+        +aip_cmdline.max_prints=3 +print_enable=0 +max_prints=0
+    ckpr_run changed 8 \
         +probe.count=22 +probe.label=NEW +probe.dupe=8 +probe.dupe=9 +probe.empty= \
         +probe.newonly=33 +probe.held=22 +choice=13 +probe.choice=15 +choice=19 \
         +probe.items.size=2 +probe.items.each=20 '+probe.items[1]=21' +probe.q=20,21 \
-        +probe.tree.children.size=1 '+probe.tree.children[0].value=22' '+probe.tree.children[0].text=new = text'
+        +probe.tree.children.size=1 '+probe.tree.children[0].value=22' '+probe.tree.children[0].text=new = text' \
+        +aip_cmdline.max_prints=7
     ckpr_run absent 3
     ckpr_run chained 4 \
         +probe.count=31 +probe.label=CHAIN +probe.dupe=18 +probe.dupe=19 +probe.empty=CHAINEMPTY \
         +probe.newonly=44 +probe.held=31 +choice=23 +probe.choice=25 +choice=29 \
         +probe.items.size=2 +probe.items.each=30 '+probe.items[1]=31' +probe.q=30,31 \
-        +probe.tree.children.size=1 '+probe.tree.children[0].value=31' '+probe.tree.children[0].text=chain = text'
+        +probe.tree.children.size=1 '+probe.tree.children[0].value=31' '+probe.tree.children[0].text=chain = text' \
+        +aip_cmdline.print_enable=0 +aip_cmdline.max_prints=4
 done
 echo CHECKPOINT_CMDLINE_PASS
