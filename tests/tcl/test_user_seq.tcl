@@ -44,6 +44,30 @@ puts "\n=== U6: status 0 without text stays OK ==="
 user_seq_run tag=ok_again
 check "default OK unchanged" [expr {[aip_check_status] == 0 && [aip_read_result] eq "OK: user_seq_run"}]
 
+puts "\n=== U7: argument keys and seq_of for user sequences ==="
+user_seq_run tag=keys
+check "listed keys accepted" [expr {[aip_check_status] == 0 && [aip_read_result] eq "OK: user_seq_run"}]
+user_seq_probe
+check "seq_of returns the running user seq" [expr {[aip_read_result] eq "seq_of_self=1"}]
+user_seq_run tgg=1
+check "unknown key rejected" [expr {[aip_check_status] == 1 &&
+    [aip_read_result] eq "ERROR: user_seq_run: unknown argument(s) tgg; allowed: api, enable, status, tag, text, wait"}]
+user_seq_run count=3
+check "count is not a framework key for user seqs" [expr {[aip_check_status] == 1 &&
+    [aip_read_result] eq "ERROR: user_seq_run: unknown argument(s) count; allowed: api, enable, status, tag, text, wait"}]
+
+puts "\n=== U8: aip_cmd::check_arg_keys in a task command ==="
+user_task_strict addr=0x10 len=4
+check "task helper accepts listed keys" [expr {[aip_check_status] == 0 && [aip_read_result] eq "OK: addr=0x10 len=4"}]
+user_task_strict adr=0x10 lne=4
+check "task helper lists unknown keys" [expr {[aip_check_status] == 1 &&
+    [aip_read_result] eq "ERROR: user_task_strict: unknown argument(s) adr, lne; allowed: addr, len, wait"}]
+user_task_strict addr=1 junk
+check "task helper reports malformed token" [expr {[aip_check_status] == 1 &&
+    [aip_read_result] eq "ERROR: user_task_strict: malformed argument 'junk'; expected key=value"}]
+user_task_strict addr=2 wait=1
+check "task helper allows wait" [expr {[aip_check_status] == 0 && [aip_read_result] eq "OK: addr=2 len="}]
+
 puts "\n=========================================="
 puts "  PASS: $pass  FAIL: $fail  TOTAL: [expr {$pass+$fail}]"
 puts "=========================================="

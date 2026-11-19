@@ -1270,10 +1270,16 @@ aip_unbind_seq cmd=vio_tx_p1                ;# 可选：注销空闲的运行时
 | `aip_cmd_seq_registry::command_of(this)` | 启动命令的句柄（沿父 seq 链查找）；不在命令中运行时为 null |
 | `aip_cmd_seq_registry::args_of(this)` | 命令参数（框架 `wait` 已剥离），如 `count=10 tag=a` |
 | `aip_cmd_seq_registry::set_result(this, status, text)` | 写命令结果；不在命令中运行时返回 0 |
+| `aip_cmd_seq_registry::check_args(this, '{"k1", "k2"})` | 参数键白名单：另允许 `wait` 和启动宏消费的键（`aip_cmd_seq`/`cseq`/`aip_bind_seq` 为 `count`、`time`，`aip_cmd_user_seq` 没有）；有未知键或非 `key=value` 的 token 时写 ERROR 结果并返回 0；不在命令中运行时返回 1 |
+| `aip_cmd_seq_registry::seq_of("cmd")` | 该命令当前运行的顶层 seq（各启动宏通用，可 `$cast` 判断类型）；空闲、未知或已被取消时为 null。命令是否存在用 `aip_cmd::get_handle("cmd") != null` |
 
 seq 写过的结果原样返回给 Tcl（`aip_check_status` / `aip_read_result`），与 `aip_cmd_user_seq` 的约定相同；
 没写时仍是 `OK: <cmd> count=N`；只写了非零 status 时文本为 `ERROR: <cmd> count=N status=S`。
 `aip_cmd_user_seq` 与上述启动流程规则一致：非空文本原样返回；status 0 无文本为 `OK: <cmd>`；非零 status 无文本为 `ERROR: <cmd> status=S`（启动流程的文本另带 `count=N`/`time=T`）。
+键匹配与 `get_arg` 相同（精确、区分大小写）；未知键的结果为 `ERROR: <cmd>: unknown argument(s) k1, k2; allowed: <排序后的允许键>`，
+非 `key=value` 的 token 为 `ERROR: <cmd>: malformed argument 'tok'; expected key=value`（与 `aip_bind_seq` 相同）。
+自己解析参数的 task 命令用 `aip_cmd::check_arg_keys(h, '{"addr", "len"})`（只额外允许 `wait`，失败时写 `h` 的结果并返回 0）；
+只要键列表时用 `aip_cmd::unknown_arg_keys(args, allowed, unknown, why)`。
 
 ```systemverilog
 class vio_tx_seq extends uvm_sequence #(vio_item);
@@ -1283,6 +1289,7 @@ class vio_tx_seq extends uvm_sequence #(vio_item);
     function new(string name = "vio_tx_seq"); super.new(name); endfunction
     task body();
         int len;
+        if (!aip_cmd_seq_registry::check_args(this, '{"queue"})) return;   // 拼错的键（如 queu=1）直接报错
         `aip_int(param_path, int, len, 64)          // body 中读，param_path 已由启动流程写好
         if (len < 1 || len > 9000) begin
             if (!aip_cmd_seq_registry::set_result(this, 1,
@@ -1298,8 +1305,9 @@ endclass
 ```
 
 ```tcl
+vio_tx_p1 count=10 queu=1   ;# → ERROR: vio_tx_p1: unknown argument(s) queu; allowed: count, queue, time, wait
 set_param path=vio.tx.p1.len value=0
-vio_tx_p1 count=10       ;# → ERROR: vio_tx_p1 len=0 out of range 1..9000，aip_check_status 为 1
+vio_tx_p1 count=10          ;# → ERROR: vio_tx_p1 len=0 out of range 1..9000，aip_check_status 为 1
 ```
 
 #### sequencer 名字表（aip_sqr_registry）

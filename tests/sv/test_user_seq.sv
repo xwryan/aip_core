@@ -17,6 +17,7 @@ class user_seq extends uvm_sequence #(user_item);
     static int runs;
     static bit last_enable;
     static string last_tag;
+    static bit seq_of_self;
 
     function new(string name = "user_seq");
         super.new(name);
@@ -31,6 +32,9 @@ class user_seq extends uvm_sequence #(user_item);
         string status_s;
         string text_s;
 
+        // 参数键白名单：aip_cmd_user_seq 除 wait 外不消费任何键，count/time 也须由 seq 自己列出。
+        if (!aip_cmd_seq_registry::check_args(this, '{"enable", "tag", "status", "text", "api"})) return;
+        seq_of_self = (aip_cmd_seq_registry::seq_of("user_seq_run") == this);
         h = aip_cmd::get_handle("user_seq_run");
         args = (h == null) ? "" : h.args_in;
         enable_s = aip_cmd::get_arg(args, "enable");
@@ -129,6 +133,32 @@ endclass
 
 `aip_cmd_user_seq(user_seq_run, user_seq, user_vsqr::seqr)
 
+// 自己解析参数的 task 命令：先用 aip_cmd::check_arg_keys 拒绝未知键，再读 addr/len。
+class user_ops;
+    static task strict();
+        aip_cmd h = aip_cmd::get_handle("user_task_strict");
+        if (!aip_cmd::check_arg_keys(h, '{"addr", "len"})) return;
+        h.result_out = $sformatf("OK: addr=%s len=%s", aip_cmd::get_arg(h.args_in, "addr"),
+                                 aip_cmd::get_arg(h.args_in, "len"));
+        h.status = 0;
+    endtask
+endclass
+
+`aip_cmd_task(user_task_strict, user_ops::strict)
+
+class user_probe_cmd extends aip_cmd;
+    task cmd_exec();
+        this.result_out = $sformatf("seq_of_self=%0d", user_seq::seq_of_self);
+        this.status = 0;
+    endtask
+
+    function new(string name);
+        super.new(name);
+    endfunction
+
+    static user_probe_cmd __inst = new("user_seq_probe");
+endclass
+
 class user_state_cmd extends aip_cmd;
     task cmd_exec();
         this.result_out = $sformatf("runs=%0d enable=%0d tag=%s driver_enable=%0d driver_tag=%s",
@@ -158,8 +188,35 @@ class user_test extends uvm_test;
         env = user_env::type_id::create("env", this);
     endfunction
 
+    // aip_cmd::unknown_arg_keys / unknown_args_text 的直接检查：顺序去重、区分大小写、brace/引号整体、
+    // 非 key=value 的 token 报错文本与 aip_bind_seq 一致。
+    function void check_key_helpers();
+        string unknown[$];
+        string why;
+        if (!aip_cmd::unknown_arg_keys("a=1 b=2 c=3", '{"a", "c"}, unknown, why) || unknown.size() != 1 ||
+            unknown[0] != "b" || why != "")
+            `uvm_fatal("USER_KEYS", "single unknown key")
+        if (!aip_cmd::unknown_arg_keys("a=1,b=2 b=3 d=4", '{"a"}, unknown, why) || unknown.size() != 2 ||
+            unknown[0] != "b" || unknown[1] != "d")
+            `uvm_fatal("USER_KEYS", "unknown keys must keep first-seen order without duplicates")
+        if (!aip_cmd::unknown_arg_keys("A=1", '{"a"}, unknown, why) || unknown.size() != 1 || unknown[0] != "A")
+            `uvm_fatal("USER_KEYS", "key match must be case-sensitive")
+        if (!aip_cmd::unknown_arg_keys("x={1 y=2} z=\"q r=3\"", '{"x", "z"}, unknown, why) || unknown.size() != 0)
+            `uvm_fatal("USER_KEYS", "brace/quote values must stay one token")
+        if (aip_cmd::unknown_arg_keys("a=1 junk", '{"a"}, unknown, why) ||
+            why != "malformed argument 'junk'; expected key=value")
+            `uvm_fatal("USER_KEYS", {"malformed token: ", why})
+        if (aip_cmd::unknown_arg_keys("=5", '{"a"}, unknown, why) || why != "malformed argument '=5'; expected key=value")
+            `uvm_fatal("USER_KEYS", {"empty key: ", why})
+        if (aip_cmd::unknown_args_text('{"qp", "foo"}, '{"wait", "qps", "count", "qps"}) !=
+            "unknown argument(s) qp, foo; allowed: count, qps, wait")
+            `uvm_fatal("USER_KEYS", "standard text must list allowed keys sorted and deduplicated")
+        $display("USER_KEYS_SV_PASS");
+    endfunction
+
     task run_phase(uvm_phase phase);
         phase.raise_objection(this);
+        check_key_helpers();
         aip_tcl_bridge::run_loop();
         phase.drop_objection(this);
     endtask

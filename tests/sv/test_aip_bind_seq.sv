@@ -22,6 +22,9 @@ class rs_record;
     static string cmd_seen[string];
     static string args_seen[string];
     static string child_cmd_seen[string];
+    static int check_ret[string];
+    static int seq_of_self[string];
+    static int child_top_ok[string];
 
     static function void note(string agent, rs_item it);
         items[it.src] = items.exists(it.src) ? items[it.src] + 1 : 1;
@@ -61,6 +64,9 @@ class rs_child_seq extends uvm_sequence #(rs_item);
     task body();
         aip_cmd cmd = aip_cmd_seq_registry::command_of(this);
         rs_record::child_cmd_seen[get_parent_sequence().get_name()] = (cmd == null) ? "<none>" : cmd.cmd_name;
+        // seq_of 返回顶层 seq（父），不是子 seq。
+        rs_record::child_top_ok[get_parent_sequence().get_name()] =
+            (cmd != null && aip_cmd_seq_registry::seq_of(cmd.cmd_name) == get_parent_sequence());
     endtask
 endclass
 
@@ -97,6 +103,7 @@ class rs_path_seq extends uvm_sequence #(rs_item);
         cmd = aip_cmd_seq_registry::command_of(this);
         rs_record::cmd_seen[get_name()] = (cmd == null) ? "<none>" : cmd.cmd_name;
         rs_record::args_seen[get_name()] = aip_cmd_seq_registry::args_of(this);
+        rs_record::seq_of_self[get_name()] = (cmd != null && aip_cmd_seq_registry::seq_of(cmd.cmd_name) == this);
         // 拒绝非法参数：结果回到 Tcl aip_check_status，不发 item。
         if (reject != 0) begin
             if (!aip_cmd_seq_registry::set_result(this, 1, $sformatf("ERROR: %s rejected len=%0d", get_name(), len)))
@@ -129,8 +136,32 @@ class rs_path_seq extends uvm_sequence #(rs_item);
     endfunction
 endclass
 
+// 先按白名单检查命令参数键（只认 tag=，框架 count/time/wait 总是允许），通过才发 count 个 item。
+class rs_strict_seq extends uvm_sequence #(rs_item);
+    `uvm_object_utils(rs_strict_seq)
+    int count = 1;
+
+    function new(string name = "rs_strict_seq");
+        super.new(name);
+    endfunction
+
+    task body();
+        bit ok = aip_cmd_seq_registry::check_args(this, '{"tag"});
+        rs_record::check_ret[get_name()] = ok;
+        if (!ok) return;
+        repeat (count) begin
+            rs_item it = rs_item::type_id::create("it");
+            it.src = get_name();
+            it.len = 0;
+            start_item(it);
+            finish_item(it);
+        end
+    endtask
+endclass
+
 `aip_seq_type(rs_plain_seq)
 `aip_seq_type_path(rs_path_seq)
+`aip_seq_type(rs_strict_seq)
 
 // 每 item 10ns 并 tick，长 seq 不触发停滞 watchdog。
 class rs_driver extends uvm_driver #(rs_item);
@@ -200,6 +231,7 @@ endclass
 `aip_cmd_seq(rs_reg_static, rs_plain_seq, aip_sqr_registry::get("rs_b"))
 `aip_cmd_cseq(rs_cseq, rs_plain_seq, aip_sqr_registry::get("rs_a"))
 `aip_cmd_seq(rs_reg_bad, rs_plain_seq, aip_sqr_registry::get("rs_none"))
+`aip_cmd_seq(rs_st_static, rs_strict_seq, aip_sqr_registry::get("rs_b"))
 
 // 预期的 AIP_SQR_REGISTRY 错误降级为 INFO 并计数；只在 armed>0 时生效，未预期的错误照常计入 UVM_ERROR。
 class rs_expect_catcher extends uvm_report_catcher;
@@ -242,6 +274,16 @@ class rs_state_cmd extends aip_cmd;
             "cmd": result_out = rs_record::cmd_seen.exists(name) ? rs_record::cmd_seen[name] : "";
             "args": result_out = rs_record::args_seen.exists(name) ? rs_record::args_seen[name] : "";
             "child_cmd": result_out = rs_record::child_cmd_seen.exists(name) ? rs_record::child_cmd_seen[name] : "";
+            "check_ret": result_out = $sformatf("%0d", rs_record::check_ret.exists(name) ? rs_record::check_ret[name] : -1);
+            "seq_of_self": result_out = $sformatf("%0d", rs_record::seq_of_self.exists(name) ? rs_record::seq_of_self[name] : -1);
+            "child_top": result_out = $sformatf("%0d", rs_record::child_top_ok.exists(name) ? rs_record::child_top_ok[name] : -1);
+            // 当前运行的顶层 seq：null 或 "<类型名>:<实例名>:<能否 cast 成 rs_plain_seq>"
+            "seq_of": begin
+                uvm_sequence_base running = aip_cmd_seq_registry::seq_of(name);
+                rs_plain_seq plain;
+                result_out = (running == null) ? "null" :
+                             $sformatf("%s:%s:%0d", running.get_type_name(), running.get_name(), $cast(plain, running));
+            end
             "arm": begin
                 rs_expect_catcher::armed = aip_cmd::parse_int_arg(name, 0);
                 result_out = name;
@@ -328,9 +370,24 @@ class rs_test extends uvm_test;
             `uvm_fatal("BIND_SEQ_PRECHECK", "rejected registrations changed the registry")
         loose = new("loose");
         if (aip_cmd_seq_registry::command_of(loose) != null || aip_cmd_seq_registry::args_of(loose) != "" ||
-            aip_cmd_seq_registry::set_result(loose, 1, "x"))
+            aip_cmd_seq_registry::set_result(loose, 1, "x") || !aip_cmd_seq_registry::check_args(loose, '{"x"}))
             `uvm_fatal("BIND_SEQ_PRECHECK", "seq outside a command resolved a launching command")
+        if (aip_cmd_seq_registry::seq_of("rs_static") != null || aip_cmd_seq_registry::seq_of("no_such_cmd") != null ||
+            aip_cmd::get_handle("rs_static") == null || aip_cmd::get_handle("no_such_cmd") != null)
+            `uvm_fatal("BIND_SEQ_PRECHECK", "seq_of/get_handle wrong for idle or unknown command")
     endfunction
+
+    // SV 直接 start 的 seq 不在命令中：check_args 返回 1，seq 照常发包。
+    task precheck_direct_start();
+        rs_strict_seq direct = rs_strict_seq::type_id::create("direct_strict");
+        direct.count = 2;
+        direct.start(env.a.sqr);
+        if (!rs_record::check_ret.exists("direct_strict") || rs_record::check_ret["direct_strict"] != 1 ||
+            rs_record::items["direct_strict"] != 2)
+            `uvm_fatal("BIND_SEQ_PRECHECK", "directly started seq was rejected by check_args")
+        // 后续 Tcl 用例按 sequencer 计数，清掉这两个预检 item。
+        rs_record::sqr_items.delete();
+    endtask
 
     // 注入队列不得暗中改变注册表；声明宏按类型名登记并区分 path 支持。
     function void precheck();
@@ -358,6 +415,7 @@ class rs_test extends uvm_test;
     task run_phase(uvm_phase phase);
         phase.raise_objection(this);
         precheck();
+        precheck_direct_start();
         aip_tcl_bridge::set_cmd_watchdog(5000);
         fork
             aip_tcl_bridge::run_loop();

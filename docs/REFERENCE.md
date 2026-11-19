@@ -705,6 +705,16 @@ warning。每次运行时调用 `configure` 或 `set_cmdline_print` 都会清空
 //   bit ok     = aip_cmd_seq_registry::set_result(this, 1, "ERROR: len out of range");  // 不在命令中运行时 0
 // launcher 收尾：seq 写过的 result_out 原样返回；没写且 status=0 → OK: <cmd> count=N|time=T；
 // 只写了非零 status → ERROR: <cmd> count=N status=S。
+//   if (!aip_cmd_seq_registry::check_args(this, '{"queue"})) return;  // 参数键白名单，见下
+//   uvm_sequence_base s = aip_cmd_seq_registry::seq_of("rdma_run");    // 命令当前运行的顶层 seq；空闲/未知/已取消 → null
+//   命令是否存在：aip_cmd::get_handle("rdma_run") != null
+// 参数键检查（键匹配同 get_arg：精确、区分大小写）：
+//   check_args 另允许 wait 与启动宏消费的键（aip_cmd_seq/cseq/aip_bind_seq：count time；aip_cmd_user_seq：无）；
+//   未知键 → status=1，"ERROR: <cmd>: unknown argument(s) k1, k2; allowed: <排序去重>"，返回 0；
+//   非 key=value 的 token → "ERROR: <cmd>: malformed argument 'tok'; expected key=value"；不在命令中运行 → 返回 1。
+//   task 命令：if (!aip_cmd::check_arg_keys(h, '{"addr", "len"})) return;   // 只额外允许 wait
+//   底层：aip_cmd::unknown_arg_keys(args, allowed, unknown, why)（顺序去重）、aip_cmd::unknown_args_text(unknown, allowed)、
+//   aip_cmd::split_arg_pairs(args, keys, values, why)（唯一的 key=value 拆分实现，aip_bind_seq 也用它）。
 
 // --- sequencer 名字表 aip_sqr_registry（env 在 connect_phase 登记）---
 //   aip_sqr_registry::set("vio_h0_pf0", pf0_sqr);   // 同名同对象幂等；同名异对象/非法名/null → UVM_ERROR AIP_SQR_REGISTRY

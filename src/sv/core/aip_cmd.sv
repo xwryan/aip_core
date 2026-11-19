@@ -238,17 +238,21 @@ bit __aip_cmd_is_cpu[string];
 uvm_sequence_base __aip_active_seqs[string];
 // 登记时的执行进程：watchdog 只清理已取消命令的 sequence，不误杀先前已 ACK 的后台 sequence。
 process __aip_active_seq_owners[string];
+// 启动宏自己消费的参数键（aip_seq_launcher 为 "count time"），check_args 视为允许。
+string __aip_active_seq_keys[string];
 
 class aip_cmd_seq_registry;
-    static function void register(string cmd_name, uvm_sequence_base seq);
+    static function void register(string cmd_name, uvm_sequence_base seq, string framework_keys = "");
         aip_cmd_execution execution = aip_cmd::get_current_execution();
         __aip_active_seqs[cmd_name] = seq;
         __aip_active_seq_owners[cmd_name] = process::self();
+        __aip_active_seq_keys[cmd_name] = framework_keys;
         if (execution != null) execution.note_sequence();
     endfunction
     static function void unregister(string cmd_name);
         if (__aip_active_seqs.exists(cmd_name)) __aip_active_seqs.delete(cmd_name);
         if (__aip_active_seq_owners.exists(cmd_name)) __aip_active_seq_owners.delete(cmd_name);
+        if (__aip_active_seq_keys.exists(cmd_name)) __aip_active_seq_keys.delete(cmd_name);
     endfunction
     // 显式全局清理；普通 watchdog 不使用。
     static function int kill_active();
@@ -261,6 +265,7 @@ class aip_cmd_seq_registry;
         end
         __aip_active_seqs.delete();
         __aip_active_seq_owners.delete();
+        __aip_active_seq_keys.delete();
         return n;
     endfunction
     static function int kill_one(string cmd_name);
@@ -303,15 +308,42 @@ class aip_cmd_seq_registry;
         return 0;
     endfunction
 
-    // seq 取启动它的命令：沿父 seq 链找最近的已登记 seq（子 seq 也能找到）；不在命令中运行时返回 null。
-    static function aip_cmd command_of(uvm_sequence_base seq);
+    // 命令当前正在运行的顶层 seq（aip_cmd_seq/cseq/aip_bind_seq/aip_cmd_user_seq 启动的都在此登记）；
+    // 命令空闲、名字未知或其 seq 已被取消时返回 null。命令是否存在用 aip_cmd::get_handle(name) != null。
+    static function uvm_sequence_base seq_of(string cmd_name);
+        return active(cmd_name) ? __aip_active_seqs[cmd_name] : null;
+    endfunction
+
+    // 沿父 seq 链找最近的已登记 seq，返回其命令名；不在命令中运行时返回空串。
+    local static function string registered_name_of(uvm_sequence_base seq);
         uvm_sequence_base current = seq;
         while (current != null) begin
             foreach (__aip_active_seqs[name])
-                if (__aip_active_seqs[name] == current) return aip_cmd::get_handle(name);
+                if (__aip_active_seqs[name] == current) return name;
             current = current.get_parent_sequence();
         end
-        return null;
+        return "";
+    endfunction
+
+    // seq 取启动它的命令：沿父 seq 链找最近的已登记 seq（子 seq 也能找到）；不在命令中运行时返回 null。
+    static function aip_cmd command_of(uvm_sequence_base seq);
+        string name = registered_name_of(seq);
+        return (name == "") ? null : aip_cmd::get_handle(name);
+    endfunction
+
+    // seq 检查启动命令的参数键（精确、区分大小写，同 get_arg）：allowed 之外还允许 wait 和启动宏自己消费的键
+    // （aip_cmd_seq/cseq/aip_bind_seq 为 count、time；aip_cmd_user_seq 没有）。有未知键或不是 key=value 的 token 时
+    // 写 status=1 与 "ERROR: <cmd>: ..." 并返回 0；不在命令中运行（如 seq 由 SV 直接 start）时返回 1。
+    static function bit check_args(uvm_sequence_base seq, string allowed[$]);
+        string name = registered_name_of(seq);
+        string keys[$];
+        if (name == "" || aip_cmd::get_handle(name) == null) return 1;
+        keys = allowed;
+        if (__aip_active_seq_keys.exists(name)) begin
+            string_darray_t consumed = aip_str::split(__aip_active_seq_keys[name]);
+            foreach (consumed[i]) keys.push_back(consumed[i]);
+        end
+        return aip_cmd::check_arg_keys(aip_cmd::get_handle(name), keys);
     endfunction
 
     // 启动命令的参数（框架 wait 已剥离）；不在命令中运行时返回空串。
@@ -528,6 +560,90 @@ class aip_cmd;
         result = new[values.size()];
         foreach (values[index]) result[index] = values[index];
         return result;
+    endfunction
+
+    // 命令参数的唯一 key=value 拆分实现（aip_bind_seq 与键检查共用）：按顶层 token 拆，brace/bracket/双引号内不拆，
+    // 空白与逗号都是分隔符（同 get_arg_values）。遇到不是 key=value 的 token（无 '=' 或键为空）返回 0，
+    // why 为 "malformed argument '<token>'; expected key=value"。
+    static function bit split_arg_pairs(string args, output string keys[$], output string values[$],
+                                        output string why);
+        int pos = 0;
+        keys.delete();
+        values.delete();
+        why = "";
+        while (pos < args.len()) begin
+            int token_end;
+            int eq;
+            string token;
+            while (pos < args.len() && (is_arg_space(args[pos]) || args[pos] == 8'd44)) pos++;
+            if (pos >= args.len()) break;
+            token_end = arg_token_end(args, pos);
+            token = args.substr(pos, token_end - 1);
+            pos = token_end;
+            eq = aip_str::str_find(token, "=");
+            if (eq <= 0) begin
+                why = {"malformed argument '", token, "'; expected key=value"};
+                return 0;
+            end
+            keys.push_back(token.substr(0, eq - 1));
+            values.push_back((eq + 1 < token.len()) ? token.substr(eq + 1, token.len() - 1) : "");
+        end
+        return 1;
+    endfunction
+
+    // args 中不在 allowed 里的键（精确、区分大小写，同 get_arg）按首次出现顺序去重放进 unknown；
+    // 有不是 key=value 的 token 时返回 0，why 同 split_arg_pairs。
+    static function bit unknown_arg_keys(string args, string allowed[$], output string unknown[$],
+                                         output string why);
+        string keys[$];
+        string values[$];
+        unknown.delete();
+        if (!split_arg_pairs(args, keys, values, why)) return 0;
+        foreach (keys[i]) begin
+            bit known = 0;
+            foreach (allowed[j]) if (allowed[j] == keys[i]) known = 1;
+            foreach (unknown[j]) if (unknown[j] == keys[i]) known = 1;
+            if (!known) unknown.push_back(keys[i]);
+        end
+        return 1;
+    endfunction
+
+    // 标准报错文本："unknown argument(s) <k1>, <k2>; allowed: <去重排序后的 allowed>"。
+    static function string unknown_args_text(string unknown[$], string allowed[$]);
+        string sorted[$];
+        string text;
+        foreach (allowed[i]) begin
+            bit seen = 0;
+            foreach (sorted[j]) if (sorted[j] == allowed[i]) seen = 1;
+            if (!seen) sorted.push_back(allowed[i]);
+        end
+        sorted.sort();
+        text = "unknown argument(s) ";
+        foreach (unknown[i]) text = {text, (i == 0) ? "" : ", ", unknown[i]};
+        text = {text, "; allowed: "};
+        if (sorted.size() == 0) text = {text, "none"};
+        foreach (sorted[i]) text = {text, (i == 0) ? "" : ", ", sorted[i]};
+        return text;
+    endfunction
+
+    // 命令参数键白名单检查（wait 总是允许），供 aip_cmd_task/aip_cmd_user_task 这类自己解析参数的命令直接调用：
+    // 有未知键或不是 key=value 的 token 时写 handle 的 status=1 与 "ERROR: <cmd>: ..." 并返回 0。
+    static function bit check_arg_keys(aip_cmd handle, string allowed[$]);
+        string keys[$];
+        string unknown[$];
+        string why;
+        if (handle == null) return 1;
+        keys = allowed;
+        keys.push_back("wait");
+        if (!unknown_arg_keys(handle.args_in, keys, unknown, why)) begin
+            handle.status = 1;
+            handle.result_out = {"ERROR: ", handle.cmd_name, ": ", why};
+            return 0;
+        end
+        if (unknown.size() == 0) return 1;
+        handle.status = 1;
+        handle.result_out = {"ERROR: ", handle.cmd_name, ": ", unknown_args_text(unknown, keys)};
+        return 0;
     endfunction
 
     static function int parse_int_arg(string s, int default_val = 0);

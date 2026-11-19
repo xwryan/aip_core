@@ -288,6 +288,59 @@ rs_check "unknown name at launch fails the command" [expr {[aip_check_status] ==
 rs_check "unknown name error lists registered names" [expr {[rs_state armed] == 0 &&
     [string match "*unknown sequencer name 'rs_none'; registered: rs_a, rs_b*" [rs_state caught_msg]]}]
 
+puts "BIND_SEQ_STAGE arg_keys"
+set r [aip_bind_seq cmd=rs_st type=rs_strict_seq sqr=$A]
+rs_check "bind strict seq" [expr {[aip_check_status] == 0}]
+set n0 [rs_state items rs_st]
+rs_st count=2 tag=x
+rs_check "listed key and count accepted" [expr {[aip_read_result] eq "OK: rs_st count=2" && [rs_state check_ret rs_st] == 1 &&
+                                               [rs_state items rs_st] == $n0 + 2}]
+set allowed "allowed: count, tag, time, wait"
+rs_st count=1 tgg=1
+set r [aip_read_result]
+rs_check "unknown key rejected" [expr {[aip_check_status] == 1 && $r eq "ERROR: rs_st: unknown argument(s) tgg; $allowed" &&
+                                      [rs_state check_ret rs_st] == 0 && [rs_state items rs_st] == $n0 + 2}]
+rs_st qp=2 foo=1 qp=3 tag=y
+rs_check "several unknown keys listed once each" [expr {[aip_check_status] == 1 &&
+    [aip_read_result] eq "ERROR: rs_st: unknown argument(s) qp, foo; $allowed"}]
+rs_st count=1 TAG=1
+rs_check "key match is case-sensitive" [expr {[aip_read_result] eq "ERROR: rs_st: unknown argument(s) TAG; $allowed"}]
+rs_st count=1 extra
+rs_check "malformed token reported like aip_bind_seq" [expr {[aip_check_status] == 1 &&
+    [aip_read_result] eq "ERROR: rs_st: malformed argument 'extra'; expected key=value"}]
+rs_st time=50ns tag=t
+rs_check "time= is a framework key" [expr {[aip_check_status] == 0 && [aip_read_result] eq "OK: rs_st time=50ns"}]
+rs_st count=1 wait=1
+rs_check "wait is a framework key" [expr {[aip_check_status] == 0 && [aip_read_result] eq "OK: rs_st count=1"}]
+rs_st count=1 tag=bg wait=0
+rs_a1 count=2
+rs_check "background launch passes the key check" [expr {[rs_state check_ret rs_st] == 1}]
+rs_st_static count=1 bogus=1
+rs_check "compile-time aip_cmd_seq uses the same check" [expr {[aip_check_status] == 1 &&
+    [aip_read_result] eq "ERROR: rs_st_static: unknown argument(s) bogus; $allowed"}]
+
+puts "BIND_SEQ_STAGE seq_of"
+rs_check "unknown name: not a command, no seq" [expr {[rs_state exists no_such_cmd] == 0 && [rs_state seq_of no_such_cmd] eq "null"}]
+rs_check "idle command: exists, no seq" [expr {[rs_state exists rs_a2] == 1 && [rs_state seq_of rs_a2] eq "null"}]
+rs_a2 count=100 wait=0
+rs_check "running bound command returns its top-level seq" [expr {[rs_state seq_of rs_a2] eq "rs_plain_seq:rs_a2:1"}]
+rs_cseq count=50 wait=0
+rs_check "running aip_cmd_cseq returns its seq (castable)" [expr {[rs_state seq_of rs_cseq] eq "rs_plain_seq:rs_cseq:1"}]
+rs_st count=20 tag=z wait=0
+rs_check "strict seq is not an rs_plain_seq" [expr {[rs_state seq_of rs_st] eq "rs_strict_seq:rs_st:0"}]
+run 3000ns
+rs_check "finished command is idle again" [expr {[rs_state seq_of rs_a2] eq "null" && [rs_state seq_of rs_cseq] eq "null" &&
+                                                [rs_state seq_of rs_st] eq "null"}]
+rs_b1 count=100000 wait=0
+kill_seq name=rs_b1
+rs_check "killed seq is no longer returned" [expr {[rs_state seq_of rs_b1] eq "null"}]
+run 20ns
+set_param path=rs.p1.child value=1
+rs_p1 count=1
+set_param path=rs.p1.child value=0
+rs_check "seq_of inside the seq is the seq itself" [expr {[rs_state seq_of_self rs_p1] == 1}]
+rs_check "seq_of from a child seq is the top-level seq" [expr {[rs_state child_top rs_p1] == 1}]
+
 puts "BIND_SEQ_STAGE unregister"
 rs_b1 count=100 wait=0
 set r [aip_unbind_seq cmd=rs_b1]

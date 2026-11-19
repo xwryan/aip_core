@@ -76,7 +76,7 @@ virtual class aip_seq_launcher;
             bit done = 0;
             mode = {"time=", time_s};
             seq = create(name, 2147483647, param_path);
-            aip_cmd_seq_registry::register(name, seq);
+            aip_cmd_seq_registry::register(name, seq, "count time");
             log_info($sformatf("[%s] %s %s, time=%s (%.1f ns)", log_tag, name, log_verb, time_s, timeout_ns));
             fork
                 begin
@@ -107,7 +107,7 @@ virtual class aip_seq_launcher;
             end
             mode = $sformatf("count=%0d", count);
             seq = create(name, int'(count), param_path);
-            aip_cmd_seq_registry::register(name, seq);
+            aip_cmd_seq_registry::register(name, seq, "count time");
             log_info($sformatf("[%s] %s %s, count=%0d", log_tag, name, log_verb, count));
             seq.start(sqr);
             aip_cmd_seq_registry::unregister(name);
@@ -236,50 +236,35 @@ class aip_bind_seq_cmd extends aip_cmd_user_task;
         end_macro_result_scope(owns_scope);
     endtask
 
-    // 严格解析 key=value：键须在 keys 中、只出现一次且值非空，required 中的键缺一即失败。
+    // 严格解析 key=value（拆分用 aip_cmd::split_arg_pairs）：键须在 keys 中、只出现一次且值非空，
+    // required 中的键缺一即失败。
     static function bit parse_keys(string args, string keys, string required,
                                    output string values[string], output string why);
         string_darray_t allowed;
         string_darray_t needed;
+        string arg_keys[$];
+        string arg_values[$];
         string missing;
-        int pos;
         allowed = aip_str::split(keys);
         needed = aip_str::split(required);
         values.delete();
-        why = "";
-        pos = 0;
-        while (pos < args.len()) begin
-            int token_end;
-            int eq;
-            bit known;
-            string token;
-            string key;
-            while (pos < args.len() && (aip_cmd::is_arg_space(args[pos]) || args[pos] == 8'd44)) pos++;
-            if (pos >= args.len()) break;
-            token_end = aip_cmd::arg_token_end(args, pos);
-            token = args.substr(pos, token_end - 1);
-            pos = token_end;
-            eq = aip_str::str_find(token, "=");
-            if (eq <= 0) begin
-                why = {"malformed argument '", token, "'; expected key=value"};
-                return 0;
-            end
-            key = token.substr(0, eq - 1);
-            known = 0;
-            foreach (allowed[i]) if (allowed[i] == key) known = 1;
+        if (!aip_cmd::split_arg_pairs(args, arg_keys, arg_values, why)) return 0;
+        foreach (arg_keys[i]) begin
+            bit known = 0;
+            foreach (allowed[j]) if (allowed[j] == arg_keys[i]) known = 1;
             if (!known) begin
-                why = {"unknown key '", key, "='; allowed keys: ", keys};
+                why = {"unknown key '", arg_keys[i], "='; allowed keys: ", keys};
                 return 0;
             end
-            if (values.exists(key)) begin
-                why = {"duplicate key '", key, "='"};
+            if (values.exists(arg_keys[i])) begin
+                why = {"duplicate key '", arg_keys[i], "='"};
                 return 0;
             end
-            if (eq == token.len() - 1) begin
-                why = {"empty value for '", key, "='"};
+            if (arg_values[i] == "") begin
+                why = {"empty value for '", arg_keys[i], "='"};
                 return 0;
             end
-            values[key] = token.substr(eq + 1, token.len() - 1);
+            values[arg_keys[i]] = arg_values[i];
         end
         missing = "";
         foreach (needed[i])
