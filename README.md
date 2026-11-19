@@ -644,9 +644,15 @@ cfg_t cfg;
 
 path 支持多级，如 `"eth.ipv4.tcp"` → `+eth.ipv4.tcp.len=…`。
 
-整数目标按类型区分有无符号：`int`/`byte`/`shortint`/`longint`/`integer` 与 `bit signed [N:0]` 可写负数；
-`bit`/`logic` 位向量与 `* unsigned` 是无符号目标，负数（含 `-0`、`-8'h1`）与超出位宽的值都 hard fatal，不截断、
-不回绕，报错给出参数名、原文与允许范围，例如：
+整数目标按类型区分有无符号，取值都不截断、不回绕，越界即 hard fatal，报错给出参数名、原文与允许范围：
+
+- 无符号目标（`bit`/`logic` 位向量、`* unsigned`）：负数（含 `-0`、`-8'h1`）与超出位宽的值都报错。
+- 有符号目标（`int`/`byte`/`shortint`/`longint`/`integer`、`bit signed [N:0]`）：纯十进制（可带负号）须在
+  [-2^(N-1), 2^(N-1)-1] 内；带基数或位宽的写法（`N'h…`、`'h…`、`'b…`、`'o…`、`'d…`、`0x…`、`0b…` 等）是位模式，
+  须放得进 N 位并按补码解释，如 `32'hFFFF_FFFF` 给 `int` 得 -1，而 `4294967295` 给 `int` 报错；带负号的基数写法
+  （如 `-8'h1`）取其无符号值的相反数，不得小于 -2^(N-1)。
+
+例如：
 
 ```text
 [FATAL] cfg.sv(42) ... AIP_CORE[cmdline] parser Error: negative value -1 for unsigned 64-bit longint unsigned (allowed 0..18446744073709551615) parameter='+dut.timeout_ns' value='-1'
@@ -799,7 +805,7 @@ function/task，或使用 `randomize() with` 完成。
 
 | 语法 | 含义 | 示例 |
 |---|---|---|
-| `v` | 固定值；支持 `0x`/`0b`/`0o`、`N'h`、`_` 分隔、正负号。负值只用于有符号目标；无符号目标（`bit[7:0]`、`int unsigned` 等）拒绝负数与越界值 | `+dut.count=-0x20`、`+dut.count=-8'd10` |
+| `v` | 固定值；支持 `0x`/`0b`/`0o`、`N'h`、`_` 分隔、正负号。无符号目标（`bit[7:0]`、`int unsigned` 等）拒绝负数与越界值；有符号目标的十进制按范围检查，基数写法按补码位模式（`32'hFFFF_FFFF` 给 `int` 得 -1） | `+dut.count=-0x20`、`+dut.count=-8'd10` |
 | `a,b,c` / `[a,b,c]` | 候选列表，随机选一个 | `+dut.count=[-3,-2,-1]` |
 | `[lo:hi]` | 闭区间随机 | `+dut.val=[1:10]` |
 | `{x:=w, [lo:hi]:=w}` | 权重随机：`:=` 每个值各占 w，`:/` 整段共占 w；权重允许为 0，整组至少有一项为正；外层 `{}` 或 `()` | `+dut.val={0:=0,[1:3]:=60}` |
@@ -2354,7 +2360,7 @@ make test_aip_bind_seq        # Tcl 运行时绑定 seq 命令（源码/.so 两�
 make test_cmdline_zero_weight # 零权重、全零/负权重及用户源码定位
 make test_cmdline_diagnostics # 非权重错误定位、FATAL 退出和禁止错误后继续执行
 make test_cmdline_split       # 分层后的原入口兼容性、确定性样例及内部片段独立编译拒绝检查
-make bench_cmdline            # 独立性能基准：53 上执行，不纳入功能回归总目标
+make bench_cmdline            # 独立性能基准：在参考服务器上执行，不纳入功能回归总目标
 make test_soload             # C 插件热加载
 make test_c_bridge_socket    # TCP 默认不监听、显式启动及命令往返
 make test_c_bridge_checkpoint # 新进程恢复未监听快照，再显式开启 TCP
@@ -2546,7 +2552,7 @@ deposit 或 force。
 | cell 内部或加密 IP 也要访问 | 上述 capability 再加 `-debug_region+cell`、`-debug_region+encrypt`，两者都要时写 `-debug_region+cell+encrypt` | `+all` 不会自动扩大 region |
 
 `aip_ucli_utils.tcl` 中 `fv` 的默认模式是 `force -deposit`；只有显式写 `-force` 才调用
-`force -freeze`。在 53 的 W-2024.09-SP1 上使用真实 `fv` 的最小实测如下：
+`force -freeze`。在参考服务器的旧版 VCS（W-2024.09-SP1）上使用真实 `fv` 的最小实测如下：
 
 | 编译选项和操作 | variable (`logic/reg`) | net (`wire/net`) |
 |---|---:|---:|

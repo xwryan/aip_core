@@ -35,8 +35,9 @@ make all       # 三个都编
 make clean
 ```
 
-- **工具链**: 默认 `CROSS` = XuanTie 绝对路径 (避免 PATH 命中 /usr/bin 通用 gcc)。
-  别的机器: `make plic CROSS=/path/to/riscv64-unknown-elf-`。
+- **工具链**: 默认 `CROSS` = `$(XUANTIE_HOME)/bin/riscv64-unknown-elf-` (绝对路径，避免 PATH 命中 /usr/bin 通用 gcc)。
+  `XUANTIE_HOME` 默认 `/opt/xuantie/Xuantie-900-gcc-elf-newlib-x86_64-V3.4.0`；别的安装位置: `make plic XUANTIE_HOME=/path/to/toolchain`
+  或 `make plic CROSS=/path/to/riscv64-unknown-elf-`。
 - **boot 模式**: `BOOT=rom` (默认, XIP)。`ram_copy`/`ram_jump` 为 Spec2,尚未实现
   (传 `BOOT=ram_*` 会 `$(error)`)。
 - wake 模式与 SV 侧对应: poll=默认; msip=`aip_cpu_bridge::set_msip_path(...)`;

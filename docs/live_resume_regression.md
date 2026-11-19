@@ -65,7 +65,7 @@ host C、RAM/ROM、固件构建与双 SVT 集成，不能只以新的最小 fixt
 检查，driver_count 均为 2，恢复后的 8 行状态与保存基线一致。
 
 已完成 host 检查：control 203、watch 70、checkpoint wait 111、元数据 8、
-loader 12，全部通过，另 `DIST_MAKEFILE_PASS` 通过。53 没有独立 `tclsh`，
+loader 12，全部通过，另 `DIST_MAKEFILE_PASS` 通过。参考服务器没有独立 `tclsh`，
 这些检查在本地主机实际执行，不把远程 skip 算作 PASS。
 
 新增同会话 PTY 矩阵 12/12 通过，共 816 条 Tcl 检查；每例另检查实际 SV
@@ -100,16 +100,16 @@ driver 完成次数以及 UVM WARNING/ERROR/FATAL 均为 0：
 
 ## 证据索引
 
-证据目录是本次运行的工件位置，不是仓库依赖；临时目录被清理后应通过测试
-入口重新生成。中间版本 `a224` / `c6e8` 的结果不计入上述终版矩阵。
+各项证据（审计索引、运行日志）保存在执行回归主机的临时目录中，不随仓库发布，也不是仓库依赖；
+临时目录被清理后应通过下文测试入口重新生成。中间版本 `a224` / `c6e8` 的结果不计入上述终版矩阵。
 
-| 范围 | 本地主机索引 | 53 工件根 |
-|---|---|---|
-| 旧全量与分组状态 | `/tmp/aip_fullmatrix_local.TAmB18/AUDIT.md` | `/tmp/aip_fullaudit.wNdMDF/`，最终 Tcl 组 `evidence/bridge_617d/` 与 `evidence/dist_617d/` |
-| 同会话 12 例 | `/tmp/aip-live-617d-evidence.Qtqm8i/RESULTS.md` | `/tmp/aip_live_resume.eT1bxB/`，`final12_617d.log` |
-| helper/EOF/batch/宽向量 | `/tmp/aip-native-ucli-local.RK5iD2/FINAL_EVIDENCE.md` | `/tmp/aip-final-edge-probes.GndLzB/`；其他路径见该索引 |
-| 双 SVT 四组 | `/tmp/aip-live-integration.b6fcNy/svt_runner_617d.log` | `/tmp/aip_live_integration.wQqH4W/`，同名日志 |
-| 本地 host 汇总 | `/tmp/aip-live-integration.b6fcNy/host_617d.log` | 不以远程 `tclsh` skip 代替 |
+| 范围 | 证据 |
+|---|---|
+| 旧全量与分组状态 | 本地主机审计索引；参考服务器全量审计目录，含最终 Tcl 组（bridge、dist）日志 |
+| 同会话 12 例 | 本地结果索引；参考服务器同会话 12 例运行日志 |
+| helper/EOF/batch/宽向量 | 本地最终证据索引；参考服务器边界探测运行目录 |
+| 双 SVT 四组 | 本地与参考服务器的 SVT runner 同名日志 |
+| 本地 host 汇总 | 本地 host 汇总日志；不以远程 `tclsh` skip 代替 |
 
 ## 既有例外：实验 PLI 插件
 
@@ -124,8 +124,7 @@ VCS exit=127 / Make exit=2
 这项不能记作 PASS，也不是本轮新增失败。它使用实验 PLI 装载路径，与经过
 验证的 `libaip_tcl_bridge.so` / `aip_init_so.tcl` 路径不同。
 
-双边证据位于 53：`/tmp/aip_fullaudit.wNdMDF/evidence/dist/test-ucli-pli.log`
-与 `evidence/pli_baseline/test-ucli-pli.log`（同一根目录）。
+修改前后两份 `test-ucli-pli.log` 保存在参考服务器的审计临时目录中，未随仓库发布。
 
 ## 版本指纹
 
@@ -146,7 +145,7 @@ d5f26672d8af21d8f8c4ec2dfe9f82add0c1aecfbc4a23c0e9c77630de8d2702  src/tcl/aip_ch
 ## 复现与边界
 
 ```bash
-# 在已加载 VCS/license 环境的 53 上执行
+# 在已加载 VCS/license 环境的参考服务器上执行
 make test_live_resume
 make ci-cmd
 make test_checkpoint_wait_vcs test_checkpoint_restore

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """tests/paused_injection：正式暂停命令队列的source/.so真实VCS门禁。
 
-必须在53的VCS环境运行；借用live_resume的纯构建函数重新构建真实SV和库，
+必须在已配置 VCS 的参考服务器环境运行；借用live_resume的纯构建函数重新构建真实SV和库，
 不使用临时原型。runner拥有独立目录、PTY子进程及日志；异常只终止自己
 创建的进程。真实Tcl/SV双PASS、计数与UVM汇总共同决定结果。
 """

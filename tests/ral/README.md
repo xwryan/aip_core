@@ -63,7 +63,7 @@ make test_ral_lifecycle
 make test_ral_lifecycle_128
 ```
 
-同样必须在53的VCS登录环境执行，分别写入 `build/lifecycle/default` 和
+同样必须在参考服务器的 VCS 登录环境执行，分别写入 `build/lifecycle/default` 和
 `build/lifecycle/width128`，与foundation的生成文件和缓存完全分离。
 `run_lifecycle.sh`沿用已验证的显式UVM源码/DPI编译约定，并链接统一package需要的socket DPI。
 UCLI执行 `tests/tcl/test_ral_lifecycle.tcl`，通过实际bridge入口测试watchdog；

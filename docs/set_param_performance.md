@@ -60,7 +60,7 @@ SV 在执行 `aip_int` / `aip_real` 等宏时抽样。这里测的是主机执�
 
 ## 功能验证
 
-53 上已通过 `make test_set_param_expressions` 和 `make test_cmdline_split_positive`：
+参考服务器上已通过 `make test_set_param_expressions` 和 `make test_cmdline_split_positive`：
 
 - 33 个标量用例，每个来源各读取 64 次，相同 seed 的输出轨迹完全一致。
 - 整数范围/列表/混合候选/权重/步长/`rand`、宽位整数、实数、字符串及枚举均覆盖。

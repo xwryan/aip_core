@@ -174,6 +174,59 @@ class aip_cmdline_usage;
     endfunction
 endclass
 
+// 整数字面量的取值规则（标量与严格 queue/schema 共用）：无符号目标不接受负号；有符号目标的纯十进制（可带负号）须在
+// [-2^(N-1), 2^(N-1)-1] 内，带基数/位宽的写法（N'h、'h、'b、'o、'd、0x、0b 等）是位模式，放进 N 位后按补码解释，
+// 带负号时取其无符号值的相反数且不得小于 -2^(N-1)。调用方先完成位宽/显式位宽检查。
+class aip_cmdline_literal;
+    // 去掉 '_' 与首尾空白后，只有可选正负号加十进制数字。
+    static function bit is_plain_decimal(string s);
+        int		start;
+        bit		digit;
+        start = 0;
+        digit = 0;
+        for (int i = 0; i < s.len(); i++) begin
+            if (s[i] == "_" || s[i] == " " || s[i] == "\t") continue;
+            if (!digit && start == 0 && (s[i] == "+" || s[i] == "-")) begin start = 1; continue; end
+            if (s[i] < "0" || s[i] > "9") return 0;
+            digit = 1;
+            start = 1;
+        end
+        return digit;
+    endfunction
+
+    static function string unsigned_range(int nbits);
+        aip_vec_t	max_v;
+        if (nbits > 64) return $sformatf("0..2^%0d-1", nbits);
+        max_v = (aip_vec_t'(1) << nbits) - 1;
+        return $sformatf("0..%0d", max_v[63:0]);
+    endfunction
+
+    static function string signed_range(int nbits);
+        aip_svec_t	half;
+        if (nbits > 64) return $sformatf("-2^%0d..2^%0d-1", nbits - 1, nbits - 1);
+        half = aip_svec_t'(1) <<< (nbits - 1);
+        return $sformatf("%0d..%0d", -half, half - 1);
+    endfunction
+
+    // 有符号目标：v 为绝对值（已确认放得进 nbits），返回是否在范围内，value 为按上述规则得到的有符号值。
+    static function bit signed_value(aip_vec_t v, bit negative, bit plain, int nbits, output aip_svec_t value);
+        aip_svec_t	mag;
+        aip_svec_t	half;
+        mag = aip_svec_t'({2'b00, v});
+        half = aip_svec_t'(1) <<< (nbits - 1);
+        if (negative) begin
+            value = -mag;
+            return mag <= half;
+        end
+        if (plain) begin
+            value = mag;
+            return mag < half;
+        end
+        value = (mag >= half) ? mag - (half <<< 1) : mag;
+        return 1;
+    endfunction
+endclass
+
 // 解析器公共诊断层，跨 T 特化共享：底层（含 byte 数组的 int .size）报错时仍能定位用户宏调用位置及正在消费的配置。
 // 入口均为不推进时间的 function，嵌套用栈保存，正常返回必须 pop。
 class aip_cmdline_diagnostic;

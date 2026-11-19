@@ -1,5 +1,5 @@
 # dist/tests：不启动仿真的加载契约测试，使用本测试拥有的临时假模块。
-# 验证源码与.so入口的幂等/缺失诊断；真实库内容另在53的UCLI用例验证。
+# 验证源码与.so入口的幂等/缺失诊断；真实库内容另在参考服务器的 UCLI 用例中验证。
 
 set dist_dir [file normalize [file join [file dirname [info script]] ..]]
 set loader   [file join $dist_dir aip_init.tcl]

@@ -148,34 +148,34 @@ class aip_cmdline #(type T = int);
         return tn == "byte" || tn == "shortint" || tn == "int" || tn == "longint" || tn == "integer";
     endfunction
 
-    // 无符号目标的取值范围文字：64 位及以下给十进制上界，更宽给 2^N-1。
-    protected static function string unsigned_range();
-        int nbits = t_bits();
-        aip_vec_t max_v;
-        if (nbits > 64) return $sformatf("0..2^%0d-1", nbits);
-        max_v = (aip_vec_t'(1) << nbits) - 1;
-        return $sformatf("0..%0d", max_v[63:0]);
-    endfunction
-
     // value_token=0 用于权重、步长等计数位置：它们沿用目标位宽检查，负数由各自规则报错。
-    // 无符号目标的取值位置拒绝负号（含 -0），不回绕；超出位宽同样报错，均为 hard fatal。
+    // 取值位置按 aip_cmdline_literal 规则检查（无符号拒绝负号；有符号十进制查范围、基数写法按补码），越界均为 hard fatal。
     protected static function aip_svec_t parse_single_num(string s, bit value_token = 1);
         aip_vec_t  v;
         aip_svec_t r;
         int width;
         bit neg;
         int nbits = t_bits();
-        bit check_unsigned = value_token && is_integer_type() && !t_signed();
+        bit check_range = value_token && is_integer_type() && nbits > 0;
+        bit is_signed = t_signed();
+        string allowed;
         if (!aip_str::str_to_vec(s, v, width, neg))
             error($sformatf("Invalid integer format: %s", s));
+        if (check_range)
+            allowed = is_signed ? aip_cmdline_literal::signed_range(nbits) : aip_cmdline_literal::unsigned_range(nbits);
         if (nbits > 0 && nbits < AIP_VEC_MAX_BITS && (v >> nbits) != 0)
             error($sformatf("value %s exceeds %0d-bit %s%s", s, nbits, $typename(T),
-                            check_unsigned ? {" (allowed ", unsigned_range(), ")"} : ""));
+                            check_range ? {" (allowed ", allowed, ")"} : ""));
         if (nbits > 0 && width > nbits)
             error($sformatf("explicit width in %s exceeds %0d-bit %s", s, nbits, $typename(T)));
-        if (check_unsigned && neg)
-            error($sformatf("negative value %s for unsigned %0d-bit %s (allowed %s)", s, nbits, $typename(T),
-                            unsigned_range()));
+        if (check_range && !is_signed && neg)
+            error($sformatf("negative value %s for unsigned %0d-bit %s (allowed %s)", s, nbits, $typename(T), allowed));
+        if (check_range && is_signed) begin
+            if (!aip_cmdline_literal::signed_value(v, neg, aip_cmdline_literal::is_plain_decimal(s), nbits, r))
+                error($sformatf("value %s out of range for signed %0d-bit %s (allowed %s)", s, nbits, $typename(T),
+                                allowed));
+            return r;
+        end
         r = aip_svec_t'({2'b00, v});
         return neg ? -r : r;
     endfunction

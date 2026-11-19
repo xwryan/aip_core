@@ -7,35 +7,41 @@
 // source order but using schema normalization, typed parsing and the allocation budget. TARGET itself never
 // crosses a helper ref boundary; only the temporary dynamic representation does.
 class aip_strict_int_queue_runtime #(type T = int);
-    // value_token=0 用于权重与步长（负数由各自规则报错）；取值位置在无符号目标上拒绝负号（含 -0），不回绕。
+    // value_token=0 用于权重与步长（负数由各自规则报错）；取值位置按 aip_cmdline_literal 规则检查：无符号拒绝负号（含 -0），
+    // 有符号十进制查范围、基数写法按补码，结果为有符号值。
     static function aip_svec_t strict_literal(string token, string path, bit value_token = 1);
         aip_vec_t value;
         aip_svec_t result;
         int explicit_width;
         bit negative;
+        bit is_signed;
         string cleaned;
+        string allowed;
         cleaned = aip_str::strip(token);
+        is_signed = aip_struct_typed_key#(T)::declared_signed();
+        allowed = is_signed ? aip_cmdline_literal::signed_range($bits(T)) : aip_cmdline_literal::unsigned_range($bits(T));
         if (!aip_str::str_to_vec(cleaned, value, explicit_width, negative))
             aip_struct_runtime::fail($sformatf(
                 "%s invalid integral literal '%s'", path, token));
         if (explicit_width > $bits(T) ||
             ($bits(T) < 1024 && (value >> $bits(T)) != 0))
             aip_struct_runtime::fail($sformatf(
-                "%s integral token '%s' exceeds %0d-bit target",
-                path, token, $bits(T)));
-        if (value_token && negative && !aip_struct_typed_key#(T)::declared_signed())
+                "%s integral token '%s' exceeds %0d-bit target (allowed %s)",
+                path, token, $bits(T), allowed));
+        if (value_token && negative && !is_signed)
             aip_struct_runtime::fail($sformatf(
                 "%s integral token '%s' is negative for unsigned %0d-bit target (allowed %s)",
-                path, token, $bits(T), unsigned_range()));
+                path, token, $bits(T), allowed));
+        if (value_token && is_signed) begin
+            if (!aip_cmdline_literal::signed_value(value, negative, aip_cmdline_literal::is_plain_decimal(cleaned),
+                                                   $bits(T), result))
+                aip_struct_runtime::fail($sformatf(
+                    "%s integral token '%s' is out of range for signed %0d-bit target (allowed %s)",
+                    path, token, $bits(T), allowed));
+            return result;
+        end
         result = aip_svec_t'({2'b00, value});
         return negative ? -result : result;
-    endfunction
-
-    static function string unsigned_range();
-        aip_vec_t max_v;
-        if ($bits(T) > 64) return $sformatf("0..2^%0d-1", $bits(T));
-        max_v = (aip_vec_t'(1) << $bits(T)) - 1;
-        return $sformatf("0..%0d", max_v[63:0]);
     endfunction
 
     static function void validate_range(string expr, string path);

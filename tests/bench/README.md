@@ -4,7 +4,7 @@
 总目标。SV 工作负载在 `tests/sv/test_cmdline_benchmark.sv`；本目录的 C 文件只提供计时，
 shell 脚本负责串行执行场景、检查结果并汇总。这里不包含性能优化实现。
 
-## 在 53 上运行
+## 在参考服务器上运行
 
 必须在已配置 VCS 和许可证的主机上，用交互式 bash 环境运行。
 例如先登录，再在该主机上的工作副本根目录执行：
@@ -16,7 +16,7 @@ cd /path/to/aip_core
 make bench_cmdline
 ```
 
-`/path/to/aip_core` 替换为 53 上的实际工作副本路径。非交互式 shell 中只执行
+`/path/to/aip_core` 替换为该主机上的实际工作副本路径。非交互式 shell 中只执行
 `source ~/.bashrc` 可能遇到文件提前 return，因此远程批处理也应使用 `bash -ic`。
 需要 VCS、C 编译器、bash、GNU `timeout`、`sort`、`awk` 等工具。
 
@@ -134,9 +134,8 @@ DUT 仿真的整体提速比例。真实收益还取决于项目中 apply 的调
   字段/查询结果、checksum、退出码检查；override 更新验证也通过。
 - [全部样本 CSV](results/2026-09-17-baseline-samples.csv) 保留每次 CPU、墙钟和 checksum；
   [汇总 CSV](results/2026-09-17-baseline-summary.csv) 保留 21 组中位数和 CPU min/max。
-- 53 上原始运行目录：`/tmp/aip_cmdline_bench.l83UzC/`；完整驱动日志是
-  `benchmark_full.log`，样本日志在 `tests/sv/cmdline_benchmark.pxwFf7/`。临时目录可能被
-  系统清理，因此 CSV 同时保存在仓库中；小工作量 pilot 未混入正式统计。
+- 原始运行目录（完整驱动日志 `benchmark_full.log`）与样本日志目录（`tests/sv/cmdline_benchmark.<随机后缀>/`）
+  位于参考服务器的临时目录，可能被系统清理，因此 CSV 同时保存在仓库中；小工作量 pilot 未混入正式统计。
 
 本次关键源码 SHA-256：
 

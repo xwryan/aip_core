@@ -110,8 +110,9 @@ help:
 	@echo "  test_cmdline_diagnostics (fatal parse errors and user source locations)"
 	@echo "  test_cmdline_opt (optional _opt reads, path aliases, array root selection, enum rand/values, unused keys)"
 	@echo "  test_cmdline_unsigned (unsigned targets reject negative and out-of-range values on every parse path)"
+	@echo "  test_cmdline_signed (signed targets: decimal range check, based literals as two's-complement bit patterns)"
 	@echo "  test_cmdline_split (standalone/package compatibility and internal include rejection)"
-	@echo "  bench_cmdline (53-only parser performance baseline; no production optimizations)"
+	@echo "  bench_cmdline (parser performance baseline for the reference server; no production optimizations)"
 	@echo "  test_cmdline_struct_schema (focused aggregate), including integration and negative matrices"
 	@echo "  test_cmdline_strict_queue"
 	@echo "  test_cseq_arbitration test_c_bridge_socket test_dut_control test_str_delim test_cmd_str_result"
@@ -397,7 +398,7 @@ test_cmdline_query:
 	cd $(TEST_SV_DIR) && grep -q 'requires an unsigned value' cmdline_query_neg.log && ! grep -q TCQ_FAIL cmdline_query_neg.log && echo 'TCQ_OK:   negative unsigned input is a hard fatal'
 
 # 可选参数 _opt、aip_cmdline_alias 别名链、选根容器、枚举 rand/数值候选、aip_cmdline_usage 未用键；负例逐项 hard fatal。
-.PHONY: test_cmdline_opt test_cmdline_unsigned
+.PHONY: test_cmdline_opt test_cmdline_unsigned test_cmdline_signed
 test_cmdline_opt:
 	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_cmdline_opt -o simv_cmdline_opt -Mdir=csrc_cmdline_opt test_cmdline_opt.sv
 	cd $(TEST_SV_DIR) && ./simv_cmdline_opt -no_save -exitstatus +o.outer_x.v=21 +o.x.v=22 +v=23 +o.x.pa=22 +pa=23 +pl=23 \
@@ -465,6 +466,51 @@ test_cmdline_unsigned:
 	            || { cat cmdline_unsigned_neg_$$c.log; echo "TCU_FAIL: negative $$c diagnostics"; exit 1; }; \
 	        ! grep -q TCU_FAIL cmdline_unsigned_neg_$$c.log; \
 	        echo "TCU_OK:   negative $$c is a hard fatal: $$expect"; \
+	    done
+
+# 有符号目标：十进制按 [-2^(N-1), 2^(N-1)-1] 检查，带基数/位宽的写法按补码位模式解释；负例逐项核对参数名、原文与允许范围。
+test_cmdline_signed:
+	cd $(TEST_SV_DIR) && vcs -sverilog -ntb_opts uvm -timescale=1ns/1ps -full64 -lca $(AIP_TEST_INCDIRS) -top test_cmdline_signed -o simv_cmdline_signed -Mdir=csrc_cmdline_signed test_cmdline_signed.sv
+	cd $(TEST_SV_DIR) && ./simv_cmdline_signed -no_save -exitstatus +ts.imax=2147483647 +ts.imin=-2147483648 "+ts.ipat=32'hFFFF_FFFF" \
+	    +ts.ihex=0xFFFFFFFF +ts.imsb=0x80000000 "+ts.itick='h7fffffff" +ts.ineg=-0x10 +ts.bmax=127 +ts.bmin=-128 "+ts.bpat=8'hff" \
+	    "+ts.bmsb=8'h80" "+ts.bneg=-8'h1" "+ts.bnegmsb=-8'h80" "+ts.bbin='b1111_1111" +ts.sv8=-128 +ts.lmax=9223372036854775807 \
+	    +ts.lmin=-9223372036854775808 "+ts.lpat=64'hFFFF_FFFF_FFFF_FFFF" "+ts.w128=128'hffffffffffffffffffffffffffffffff" \
+	    +ts.wmax=170141183460469231731687303715884105727 "+ts.brange=[8'h80:8'h81]" +ts.ilist=2147483647,-2147483648 \
+	    "+ts.bq=127,-128,8'hff" "+ts.cfg.s8f=8'h80" +ts.cfg.u32f=4294967295 +ts.leg.s8=-128 \
+	    > cmdline_signed.log 2>&1 || { cat cmdline_signed.log; exit 1; }
+	cd $(TEST_SV_DIR) && grep -E '^TCS_|TEST_CMDLINE_SIGNED' cmdline_signed.log && grep -q TEST_CMDLINE_SIGNED_PASS cmdline_signed.log && ! grep -q '^TCS_FAIL' cmdline_signed.log
+	cd $(TEST_SV_DIR) && set -e; \
+	    for c in dec_over32 dec_under32 dec_u32 dec_over8 dec_under8 based_over8 neg_based_under8 range weight_value \
+	             dec_over64 override list queue schema legacy opt; do \
+	        r8="for signed 8-bit byte (allowed -128..127)"; r32="for signed 32-bit int (allowed -2147483648..2147483647)"; \
+	        where="parameter='+ts.bad8'"; \
+	        case $$c in \
+	            dec_over32)       set -- "+ts.bad32=2147483648";  expect="value 2147483648 out of range $$r32"; where="parameter='+ts.bad32'";; \
+	            dec_under32)      set -- "+ts.bad32=-2147483649"; expect="value -2147483649 out of range $$r32"; where="parameter='+ts.bad32'";; \
+	            dec_u32)          set -- "+ts.bad32=4294967295";  expect="value 4294967295 out of range $$r32"; where="parameter='+ts.bad32' value='4294967295'";; \
+	            dec_over8)        set -- "+ts.bad8=128";          expect="value 128 out of range $$r8";; \
+	            dec_under8)       set -- "+ts.bad8=-129";         expect="value -129 out of range $$r8";; \
+	            based_over8)      set -- "+ts.bad8=0x100";        expect="value 0x100 exceeds 8-bit byte (allowed -128..127)";; \
+	            neg_based_under8) set -- "+ts.bad8=-8'hff";       expect="value -8'hff out of range $$r8";; \
+	            range)            set -- "+ts.bad8=[-129:0]";     expect="value -129 out of range $$r8";; \
+	            weight_value)     set -- "+ts.bad8={200:=1,1:=1}"; expect="value 200 out of range $$r8";; \
+	            dec_over64)       set -- "+ts.bad64=9223372036854775808"; where="parameter='+ts.bad64'"; \
+	                              expect="value 9223372036854775808 out of range for signed 64-bit longint (allowed -9223372036854775808..9223372036854775807)";; \
+	            override)         set -- ;                         expect="value 200 out of range $$r8"; where="$$where value='200'";; \
+	            list)             set -- "+ts.arr=1,4294967295";  expect="value 4294967295 out of range $$r32"; where="parameter='+ts.arr[1]'";; \
+	            queue)            set -- "+ts.q8=1,200";          where="[AIP_STRUCT]"; \
+	                              expect="ts.q8[1] integral token '200' is out of range for signed 8-bit target (allowed -128..127)";; \
+	            schema)           set -- "+ts.ncfg.s8f=128";      where="[AIP_STRUCT]"; \
+	                              expect="ts.ncfg.s8f integral token '128' is out of range for signed 8-bit target (allowed -128..127)";; \
+	            legacy)           set -- "+ts.leg.s8=-129";       expect="value -129 out of range $$r8"; where="parameter='+ts.leg.s8'";; \
+	            opt)              set -- "+ts.opt8=200";          expect="value 200 out of range $$r8"; where="parameter='+ts.opt8' value='200'";; \
+	        esac; \
+	        rc=0; ./simv_cmdline_signed -no_save -exitstatus +tcs_neg=$$c "$$@" > cmdline_signed_neg_$$c.log 2>&1 || rc=$$?; \
+	        test $$rc -ne 0 || { cat cmdline_signed_neg_$$c.log; echo "TCS_FAIL: negative $$c was accepted"; exit 1; }; \
+	        grep -F '[FATAL]' cmdline_signed_neg_$$c.log | grep -F -- "$$expect" | grep -Fq -- "$$where" \
+	            || { cat cmdline_signed_neg_$$c.log; echo "TCS_FAIL: negative $$c diagnostics"; exit 1; }; \
+	        ! grep -q '^TCS_FAIL' cmdline_signed_neg_$$c.log; \
+	        echo "TCS_OK:   negative $$c is a hard fatal: $$expect"; \
 	    done
 
 # aip_cmd::parse_uint_arg 严格无符号解析；同时核对 parse_int64_arg 的旧行为不变。

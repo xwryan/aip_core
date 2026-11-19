@@ -1,8 +1,9 @@
 # AIP CPU firmware build (XuanTie C908, RV64): make poll|msip|plic|all -> build/<wake>[_<boot>].hex.
 # BOOT=rom (XIP, default) | ram_copy (ROM→RAM copy) | ram_jump (stub→RAM).
-# 默认用 XuanTie 工具链绝对路径（避免 PATH 命中 /usr/bin 通用 gcc），可用 CROSS=... 覆盖。
+# 默认用 XuanTie 工具链绝对路径（避免 PATH 命中 /usr/bin 通用 gcc）：设 XUANTIE_HOME 为工具链根目录，或用 CROSS=... 覆盖。
 
-CROSS   ?= /home/ubuntu/aip_xuantie/Xuantie-900-gcc-elf-newlib-x86_64-V3.4.0/bin/riscv64-unknown-elf-
+XUANTIE_HOME ?= /opt/xuantie/Xuantie-900-gcc-elf-newlib-x86_64-V3.4.0
+CROSS   ?= $(XUANTIE_HOME)/bin/riscv64-unknown-elf-
 CC      := $(CROSS)gcc
 OBJCOPY := $(CROSS)objcopy
 OBJDUMP := $(CROSS)objdump
