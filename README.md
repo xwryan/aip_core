@@ -35,7 +35,7 @@
 |---|---|
 | 仿真器 | VCS Q-2020.03 及以上（W-2024.09 已验证） |
 | include | `+incdir+<aip_core> +incdir+<aip_core>/src/sv` |
-| filelist | 工程 filelist 直接用 `-f $AIP_CORE_ROOT/aip_core.f`（`AIP_CORE_ROOT` 为仓库根，只含 incdir 与统一入口），放在所有依赖 AIP 的 filelist 之前 |
+| filelist | 工程 filelist 用大写 `-F <aip_core>/aip_core.f`（只含相对该文件的 `+incdir+./`、`+incdir+./src/sv` 与根入口 `aip_core_pkg.sv`，可在任意目录编译），放在所有依赖 AIP 的项目的 `-F` 之前；使用方在自己的 package/module 内 `` `include "aip_core_import.svh" ``（即 `import aip_core_pkg::*;`） |
 | timescale | 必须 `-timescale=1ns/1ps`，否则 `aip_time` / `aip_clk` 延迟为零、时钟死循环 |
 | debug access | 标准集成建议 `-debug_access+r+w+f+wn`；其中 Tcl bridge/快照本身只需 `+r+w+f`，`+wn` 用于 `fv`/`dut_deposit` 写 DUT `wire/net`。各 capability 必须用 `+` 分隔，**`+rwf` 连写无效**；完整选择方法见[第 15 节](#15-vcs-debug-access-能力图与选项速查) |
 | 入口顺序 | `` `include "aip_core_pkg.sv" `` 必须是每个 compilation unit 里**第一个** AIP 文件 |
@@ -100,7 +100,7 @@ endmodule
 ```bash
 vcs -sverilog -ntb_opts uvm -full64 -timescale=1ns/1ps -debug_access+r+w+f+wn \
     +incdir+<aip_core> +incdir+<aip_core>/src/sv tb.sv -o simv
-# filelist 写法等价：export AIP_CORE_ROOT=<aip_core>，用 -f $AIP_CORE_ROOT/aip_core.f 代替两个 +incdir+
+# filelist 写法等价：用 -F <aip_core>/aip_core.f（大写 -F，路径相对该 filelist）代替两个 +incdir+
 
 ./simv -ucli -do test.tcl +UVM_NO_RELNOTES     # 批处理：脚本跑完退出
 ./simv -ucli -i  test.tcl +UVM_NO_RELNOTES     # 交互：脚本跑完停在 ucli% 继续手敲
@@ -1396,7 +1396,7 @@ stream（mismatch、drop、unexpected、pending、overflow 或诊断 warning 非
 保留它会在 time 0 得到 `[AIP_CMD] Command 'scb_list' already registered` 之类的非致命错误，两套实现只有先注册的生效。
 同时完成 `src/` 目录调整：
 
-- 编译：`+incdir+<aip_core>/src/sv`，编译 `<aip_core>/src/sv/aip_core_pkg.sv`（或设 `AIP_CORE_ROOT` 后用 `-f <aip_core>/aip_core.f`），仍需 `-timescale=1ns/1ps`。
+- 编译：`+incdir+<aip_core>/src/sv`，编译 `<aip_core>/src/sv/aip_core_pkg.sv`（或直接用 `-F <aip_core>/aip_core.f`），仍需 `-timescale=1ns/1ps`。
 - Tcl：设好 `AIP_CORE=<aip_core 根目录>` 后 `source $env(AIP_CORE)/src/tcl/aip_cmd.tcl`，或改用 `dist/aip_init.tcl` / `dist/aip_init_so.tcl`。
 - 要让 Tcl `scb_*` 看到平台的 scoreboard，须改用 `aip_scb#(T)`；平台本地的 scoreboard 副本不会登记，Tcl 查询不到。
 
